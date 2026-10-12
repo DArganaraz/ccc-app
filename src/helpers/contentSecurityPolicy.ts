@@ -60,19 +60,36 @@ const DEV_CONNECT_SRC = ["http://localhost:*", "http://127.0.0.1:*", "http://*.l
 export interface CspOptions {
   nonce?: string;
   dev?: boolean;
+  // Origins of the API this build talks to. Self-hosted installs may serve it over
+  // plain http (e.g. http://localhost:8084 on a local Docker run), which https: alone misses.
+  apiOrigins?: string[];
 }
 
+// Turns configured API/content/socket URLs into CSP origins, ignoring blanks and bad values.
+export const toOrigins = (urls: (string | undefined)[]): string[] => {
+  const origins = new Set<string>();
+  for (const url of urls) {
+    if (!url) continue;
+    try {
+      const origin = new URL(url).origin;
+      if (origin !== "null") origins.add(origin);
+    } catch { /* skip */ }
+  }
+  return [...origins];
+};
+
 export const buildContentSecurityPolicy = (options: CspOptions = {}): string => {
-  const { nonce, dev = false } = options;
+  const { nonce, dev = false, apiOrigins = [] } = options;
+  const httpApiOrigins = apiOrigins.filter((o) => o.startsWith("http:"));
 
   const scriptSrc = ["'self'", ...(nonce ? [`'nonce-${nonce}'`, "'strict-dynamic'"] : []), ...SCRIPT_SRC_HOSTS, ...(dev ? DEV_SCRIPT_SRC : [])];
-  const connectSrc = ["'self'", ...CONNECT_SRC_HOSTS, ...(dev ? DEV_CONNECT_SRC : [])];
+  const connectSrc = ["'self'", ...CONNECT_SRC_HOSTS, ...apiOrigins.filter((o) => !o.startsWith("https:") && !o.startsWith("wss:")), ...(dev ? DEV_CONNECT_SRC : [])];
 
   return [
     "default-src 'self'",
     "base-uri 'self'",
     "object-src 'none'",
-    "img-src 'self' data: blob: https:",
+    ["img-src 'self' data: blob: https:", ...httpApiOrigins].join(" "),
     "font-src 'self' data: " + FONT_SRC_HOSTS.join(" "),
     "style-src 'self' 'unsafe-inline' " + STYLE_SRC_HOSTS.join(" "),
     "script-src " + scriptSrc.join(" "),
@@ -80,7 +97,7 @@ export const buildContentSecurityPolicy = (options: CspOptions = {}): string => 
     "frame-src 'self' https:",
     "frame-ancestors " + FRAME_ANCESTORS.join(" "),
     "worker-src 'self' blob:",
-    "media-src 'self' blob: https:",
+    ["media-src 'self' blob: https:", ...httpApiOrigins].join(" "),
     "form-action " + FORM_ACTION.join(" ")
   ].join("; ");
 };
