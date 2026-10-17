@@ -2,9 +2,10 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { Box, Button, Icon, Typography } from "@mui/material";
+import { Button, Typography } from "@mui/material";
 import { Locale } from "@churchapps/apphelper";
 import { mobileTheme } from "./mobileTheme";
+import { PlateSection } from "./kit";
 import { useNotificationDiagnostics } from "../hooks/useNotificationDiagnostics";
 import { WebPushHelper } from "@/helpers";
 
@@ -30,7 +31,7 @@ export const NotificationPermissionBanner = ({ enabled }: Props) => {
     try {
       const subscription = await WebPushHelper.subscribe();
       if (!subscription && WebPushHelper.getPermissionState() === "granted") {
-        throw new Error("Permission granted, but device registration did not complete.");
+        throw new Error(Locale.label("mobile.notificationBanner.registrationIncomplete"));
       }
     } catch (error) {
       console.error("[webpush] dashboard enable failed:", error);
@@ -44,48 +45,36 @@ export const NotificationPermissionBanner = ({ enabled }: Props) => {
   if (!enabled || loading || diagnostics.permission === "unsupported") return null;
 
   const installRequired = WebPushHelper.requiresInstallForPush();
-  let tone = {
-    background: "rgba(13, 71, 161, 0.08)",
-    border: "rgba(13, 71, 161, 0.22)",
-    icon: tc.primary
-  };
-  let iconName = "notifications_active";
   let title = "";
   let body = "";
   let primaryLabel = "";
   let primaryAction: (() => void | Promise<void>) | null = null;
 
   if (diagnostics.permission === "denied") {
-    tone = {
-      background: "rgba(239, 68, 68, 0.10)",
-      border: "rgba(239, 68, 68, 0.28)",
-      icon: "#dc2626"
-    };
-    iconName = "notifications_off";
-    title = "Enable notifications in your browser";
-    body = `Notifications are currently blocked. ${WebPushHelper.getUnblockInstructions()}`;
-    primaryLabel = "View Notification Settings";
+    title = Locale.label("mobile.notificationBanner.blockedTitle");
+    body = Locale.label("mobile.notificationBanner.blockedBody").replace("{}", WebPushHelper.getUnblockInstructions());
+    primaryLabel = Locale.label("mobile.notificationBanner.viewSettings");
     primaryAction = () => router.push("/mobile/notifications");
   } else if (diagnostics.permission !== "granted" && installRequired) {
-    title = "Install app to enable notifications";
-    body = "On iPhone, notifications work after the app is added to your Home Screen. Install the app, then return and allow notifications.";
-    primaryLabel = "Install App";
+    title = Locale.label("mobile.notificationBanner.installTitle");
+    body = Locale.label("mobile.notificationBanner.installBody");
+    primaryLabel = Locale.label("mobile.notificationBanner.installApp");
     primaryAction = () => router.push("/mobile/install");
   } else if (diagnostics.permission !== "granted") {
-    title = "Turn on notifications";
-    body = "Get alerts for new messages, group updates, and reminders. Tap Enable Notifications, then choose Allow when asked.";
-    primaryLabel = busy ? "Enabling..." : "Enable Notifications";
+    title = Locale.label("mobile.notificationBanner.enableTitle");
+    body = Locale.label("mobile.notificationBanner.enableBody");
+    primaryLabel = busy ? Locale.label("mobile.notificationBanner.enabling") : Locale.label("mobile.notificationBanner.enableButton");
     primaryAction = busy ? null : handleEnable;
   } else if (!diagnostics.hasSubscription || (diagnostics.serverRegistrationEnabled && !diagnostics.hasConfirmedServerEnrollment)) {
     if (installRequired) {
-      title = "Install app to finish notifications";
-      body = "This device has permission, but iPhone push notifications need the installed app experience to complete setup.";
-      primaryLabel = "Install App";
+      title = Locale.label("mobile.notificationBanner.installFinishTitle");
+      body = Locale.label("mobile.notificationBanner.installFinishBody");
+      primaryLabel = Locale.label("mobile.notificationBanner.installApp");
       primaryAction = () => router.push("/mobile/install");
     } else {
-      title = "Finish notification setup";
-      body = "Notifications are allowed, but this device still needs to register for alerts. Try again now.";
-      primaryLabel = busy ? "Retrying..." : "Retry Registration";
+      title = Locale.label("mobile.notificationBanner.finishTitle");
+      body = Locale.label("mobile.notificationBanner.finishBody");
+      primaryLabel = busy ? Locale.label("mobile.notificationBanner.retrying") : Locale.label("mobile.notificationBanner.retryButton");
       primaryAction = busy ? null : handleEnable;
     }
   } else {
@@ -93,38 +82,21 @@ export const NotificationPermissionBanner = ({ enabled }: Props) => {
   }
 
   return (
-    <Box
-      sx={{
-        mx: `${mobileTheme.spacing.md}px`,
-        mb: 2.5,
-        p: "14px 16px",
-        borderRadius: `${mobileTheme.radius.lg}px`,
-        bgcolor: tone.background,
-        border: `1px solid ${tone.border}`,
-        display: "flex",
-        gap: 1.5,
-        alignItems: "flex-start"
-      }}
-    >
-      <Icon sx={{ color: tone.icon, fontSize: 22, mt: "2px" }}>{iconName}</Icon>
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: tc.text, mb: 0.5 }}>
-          {title}
-        </Typography>
-        <Typography sx={{ fontSize: 13, lineHeight: "18px", color: tc.textMuted }}>
-          {body}
-        </Typography>
-        <Box sx={{ display: "flex", gap: 1, mt: 1.5, flexWrap: "wrap" }}>
-          {primaryAction && (
-            <Button size="small" variant="contained" onClick={() => { void primaryAction(); }} disabled={busy}>
-              {primaryLabel}
-            </Button>
-          )}
-        </Box>
-        {errorMessage && (
-          <Typography sx={{ fontSize: 12, color: "#dc2626", mt: 1 }}>{errorMessage}</Typography>
-        )}
-      </Box>
-    </Box>
+    <PlateSection title={Locale.label("mobile.components.notifications")}>
+      <Typography sx={{ fontSize: 15, lineHeight: "21px", fontWeight: 600, color: tc.text }}>{title}</Typography>
+      <Typography sx={{ mt: "2px", fontSize: 13.5, lineHeight: "19px", color: tc.textSecondary }}>{body}</Typography>
+      {primaryAction && (
+        <Button
+          variant={diagnostics.permission === "denied" ? "outlined" : "contained"}
+          size="small"
+          onClick={() => { void primaryAction(); }}
+          disabled={busy}
+          sx={{ mt: "12px" }}
+        >
+          {primaryLabel}
+        </Button>
+      )}
+      {errorMessage && <Typography sx={{ fontSize: 13, color: tc.error, mt: 1 }}>{errorMessage}</Typography>}
+    </PlateSection>
   );
 };

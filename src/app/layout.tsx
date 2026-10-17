@@ -1,3 +1,4 @@
+import { DropMalformedHash } from "@/components/DropMalformedHash";
 import { EnvironmentHelper } from "@/helpers/EnvironmentHelper";
 import { Roboto } from "next/font/google";
 import "@/styles/myconnect.css";
@@ -24,7 +25,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html className={roboto.className}>
-      <body>{children}</body>
+      <body>
+        <DropMalformedHash />
+        {children}
+      </body>
     </html>
   );
 }

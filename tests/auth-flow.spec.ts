@@ -1,23 +1,23 @@
 import { test, expect } from "@playwright/test";
-import { mobileLogoutButton } from "./helpers/mobile";
+import { mobileSignedInChrome, mobileSignOutLink } from "./helpers/mobile";
 
 // Authentication is established via global-setup.ts which logs in once and
 // saves storage state. Tests inherit that state by default; tests that need
 // the anonymous shell call `clearCookies` first.
 
 test.describe("Authentication", () => {
-  test("logged-in user lands on the mobile dashboard with Logout chrome", async ({ page }) => {
+  test("logged-in user lands on the mobile dashboard with signed-in chrome", async ({ page }) => {
     await page.goto("/mobile");
     await expect(page).toHaveURL(/\/mobile\/dashboard/);
-    await expect(mobileLogoutButton(page)).toBeVisible();
+    await expect(mobileSignedInChrome(page)).toBeVisible();
   });
 
-  test("Logout button targets /mobile/logout (per docs)", async ({ page }) => {
-    await page.goto("/mobile");
-    const button = mobileLogoutButton(page);
-    await expect(button).toBeVisible();
-    const href = await button.getAttribute("href");
-    expect(href).toBe("/mobile/logout");
+  test("More page Sign out targets /mobile/logout (per docs)", async ({ page }) => {
+    await page.goto("/mobile/more");
+    const link = mobileSignOutLink(page);
+    await expect(link).toBeVisible({ timeout: 15000 });
+    await expect(link).toHaveText(/Sign out/i);
+    expect(await link.getAttribute("href")).toBe("/mobile/logout");
   });
 
   test("login form fields render on /login", async ({ page }) => {
@@ -46,9 +46,8 @@ test.describe("Authentication", () => {
 
   test("anonymous /mobile/dashboard surfaces Sign In affordance", async ({ page }) => {
     // Per b1-mobile/getting-started/logging-in.md, an anonymous visitor to
-    // /mobile/* should see a way back to the Sign In flow. The MobileDrawer
-    // shows a Login button (linking to /mobile/login) when the user is not
-    // authenticated.
+    // /mobile/* should see a way back to the Sign In flow. The dashboard
+    // shows a Sign in button (linking to /mobile/login) to visitors.
     await page.context().clearCookies();
     await page.evaluate(() => {
       try { localStorage.clear(); } catch { /* ignore */ }
@@ -121,6 +120,19 @@ test.describe("Mobile login returnUrl", () => {
   });
 });
 
+test.describe("Mobile login labels", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("sign-in screen shows its labels and the empty-email error", async ({ page }) => {
+    await page.goto("/mobile/login");
+    const signIn = page.getByRole("button", { name: "Sign In" });
+    await expect(signIn).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText("Forgot password?")).toBeVisible();
+    await signIn.click();
+    await expect(page.getByText("Please enter your email.")).toBeVisible();
+  });
+});
+
 // Mobile login writes a `jwt` cookie; the church website restores the session from it
 // so a member signed in on /mobile is not shown as logged out on the website. Logging
 // out must not race that restore and sign the member back in.
@@ -135,18 +147,18 @@ test.describe("Mobile session on the church website", () => {
     await page.waitForURL(/\/mobile\/dashboard/, { timeout: 30000 });
 
     await page.reload();
-    await expect(mobileLogoutButton(page)).toBeVisible({ timeout: 20000 });
+    await expect(mobileSignedInChrome(page)).toBeVisible({ timeout: 20000 });
 
     await page.goto("/");
     await expect(page.getByTestId("user-menu-chip")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("login-chip")).toHaveCount(0);
 
     await page.goto("/mobile/dashboard");
-    await expect(mobileLogoutButton(page)).toBeVisible({ timeout: 20000 });
+    await expect(mobileSignedInChrome(page)).toBeVisible({ timeout: 20000 });
 
     await page.goto("/mobile/logout");
     await page.waitForURL(url => !url.pathname.includes("/logout"), { timeout: 20000 });
-    await expect(mobileLogoutButton(page)).toHaveCount(0, { timeout: 5000 });
+    await expect(mobileSignedInChrome(page)).toHaveCount(0, { timeout: 5000 });
     await page.goto("/");
     await expect(page.getByTestId("login-chip")).toBeVisible({ timeout: 20000 });
     await expect(page.getByTestId("user-menu-chip")).toHaveCount(0);
