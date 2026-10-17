@@ -1,5 +1,6 @@
 import { EnvironmentHelper } from "@/helpers/EnvironmentHelper";
 import { Roboto } from "next/font/google";
+import "@/styles/myconnect.css";
 
 const roboto = Roboto({
   weight: ["400", "700"],

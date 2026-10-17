@@ -80,8 +80,7 @@ export function LoginClient({ showLogo, redirectAfterLogin, loginContainerCssPro
         handleRedirect={handleRedirect}
         defaultEmail={process.env.NEXT_PUBLIC_STAGE === "demo" ? "demo@b1.church" : undefined}
         defaultPassword={process.env.NEXT_PUBLIC_STAGE === "demo" ? "password" : undefined}
-        showFooter={true}
-        containerStyle={{ paddingBottom: 96 }}
+        showFooter={false}
       />
 
     </Layout>
