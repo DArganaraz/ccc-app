@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { PersonHelper, WrapperPageProps } from "@/helpers";
 import { Loading } from "@churchapps/apphelper";
 import { FormSubmissionEdit } from "@churchapps/apphelper/forms";
@@ -27,7 +26,6 @@ export function FormPage(props: Props) {
   const [unRestrictedFormId, setUnRestrictedFormId] = useState<string>("");
   const [form, setForm] = useState<StandaloneFormInterface | null>(null);
   const [loadFailed, setLoadFailed] = useState<boolean>(false);
-  const router = useRouter();
 
   const loadData = async () => {
     setIsLoading(true);
@@ -65,7 +63,7 @@ export function FormPage(props: Props) {
       personId={PersonHelper?.person?.id}
       displayMode={form?.displayMode}
       updatedFunction={handleUpdate}
-      cancelFunction={() => router.push("/")}
+      showHeader={false}
     />
   );
 
