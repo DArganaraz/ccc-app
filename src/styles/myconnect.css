@@ -5,3 +5,19 @@ img[src="/images/logo-login.png"] {
   max-width: 100%;
   object-fit: contain;
 }
+
+/* MyConnect: compact page-builder cards (home page "This week" cards). Kept here rather than inline,
+   because the page editor rewrites a card's text and drops inline styles when someone edits it. */
+.MuiCard-root[id^="el-"] .MuiCardContent-root h3 {
+  margin: 0 0 4px;
+  font-size: 19px;
+}
+
+.MuiCard-root[id^="el-"] .MuiCardContent-root p {
+  margin: 0;
+}
+
+.MuiCard-root[id^="el-"] .MuiCardContent-root a {
+  font-weight: 600;
+  text-decoration: none;
+}
