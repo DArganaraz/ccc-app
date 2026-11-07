@@ -431,6 +431,8 @@ export function EventRegister({ churchId, eventId, event }: Props) {
           </Box>
         )}
 
+        <Alert severity="info" icon={<Icon>group_add</Icon>} sx={{ mb: 1 }}>{Locale.label("registration.addOthersNextStep", "Bringing family or friends? You can add them on the next step.")}</Alert>
+
         {reg.error && <Alert severity="error" sx={{ mb: 1 }}>{reg.error}</Alert>}
 
         <Button variant="contained" onClick={reg.continueFromInfo} fullWidth size="large" startIcon={<Icon>how_to_reg</Icon>} sx={{ mt: 1 }}>

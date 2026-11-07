@@ -424,6 +424,7 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
               </Select>
             </Box>
           )}
+          <Typography sx={{ mt: "12px", fontSize: 14, color: tc.textSecondary }}>{Locale.label("registration.addOthersNextStep", "Bringing family or friends? You can add them on the next step.")}</Typography>
           {reg.error && errorLine(reg.error)}
         </PlateSection>
         {eventSection}
