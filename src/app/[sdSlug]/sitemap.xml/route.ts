@@ -2,16 +2,26 @@ import { NextRequest } from "next/server";
 import { ApiHelper } from "@churchapps/apphelper";
 import { EnvironmentHelper } from "@/helpers";
 import { loadPublicSiteHidden } from "@/helpers/publicSiteServer";
+import { pageTreePath } from "@/helpers/pageTreePath";
+import { buildOccurrences, eventPageId } from "@/helpers/EventOccurrences";
+import { collectCuratedCalendarIds } from "@/components/seo/pageElements";
+import { EventHelper } from "@churchapps/helpers";
+import type { EventInterface } from "@churchapps/helpers";
+import type { PageInterface } from "@/helpers/interfaces";
 
 interface SitemapPage { url?: string; title?: string; }
-interface SitemapPost { slug?: string; }
+interface SitemapPost { slug?: string; publishDate?: string; }
 interface SitemapSermon { id?: string; publishDate?: string; }
 interface SitemapRedirect { fromPath?: string; }
+
+// Same window the pages' Event JSON-LD uses; an event with no date in it is not on any calendar a visitor sees.
+const EVENT_WINDOW_DAYS = 180;
+const MAX_TREE_PAGES = 50;
 
 const escapeXml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 
 const getBaseUrl = (request: NextRequest, sdSlug: string) => {
-  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || sdSlug + ".b1.church";
+  const host = request.headers.get("x-public-host") || request.headers.get("x-forwarded-host") || request.headers.get("host") || sdSlug + ".b1.church";
   const proto = request.headers.get("x-forwarded-proto") || "https";
   return proto + "://" + host;
 };
@@ -44,8 +54,11 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sdS
       const siteId = church?.siteId || "";
       // Endpoint added alongside this route; older API deploys 404 and we fall back to the home page.
       const pagesResponse = await fetch(contentApi + "/pages/public/" + church.id + (siteId ? "?siteId=" + siteId : ""), { next: { revalidate: 3600, tags: [sdSlug] } } as RequestInit);
+      let pages: SitemapPage[] = [];
       if (pagesResponse.ok) {
-        const pages: SitemapPage[] = await pagesResponse.json();
+        pages = await pagesResponse.json();
+        // Without a home page "/" redirects to /mobile (see (public)/page.tsx), which robots.txt disallows.
+        if (!pages.some((p) => p.url === "/")) urls.delete("/");
         pages.forEach((p) => { if (p.url?.startsWith("/")) urls.set(p.url, undefined); });
       }
       if (!siteId) {
@@ -53,8 +66,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sdS
         if (postsResponse.ok) {
           const posts: SitemapPost[] = await postsResponse.json();
           if (Array.isArray(posts) && posts.length > 0) {
-            urls.set("/blog", undefined);
-            posts.forEach((p) => { if (p.slug) urls.set("/blog/" + p.slug, undefined); });
+            const dates = posts.map((p) => toDate(p.publishDate)).filter(Boolean) as string[];
+            urls.set("/blog", dates.sort().pop());
+            posts.forEach((p) => { if (p.slug) urls.set("/blog/" + p.slug, toDate(p.publishDate)); });
           }
         }
       }
@@ -62,6 +76,19 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sdS
       const redirects: SitemapRedirect[] | null = await getJson(contentApi + "/redirects/public/" + church.id).catch(() => null);
       const redirected = new Set((Array.isArray(redirects) ? redirects : []).map((r) => (r.fromPath || "").toLowerCase()));
       const addBuiltIn = (path: string, lastmod?: string) => { if (!urls.has(path) && !redirected.has(path)) urls.set(path, lastmod); };
+
+      // Event pages are only linked from the calendar tiles, which render in the browser.
+      const trees = await Promise.all(pages.filter((p) => p.url?.startsWith("/")).slice(0, MAX_TREE_PAGES)
+        .map((p) => getJson(contentApi + pageTreePath(church.id, p.url as string, siteId)).catch(() => null) as Promise<PageInterface | null>));
+      const calendarIds = Array.from(new Set(trees.flatMap((t) => collectCuratedCalendarIds(t?.sections))));
+      if (calendarIds.length > 0) {
+        const calendars = await Promise.all(calendarIds.map((id) => getJson(contentApi + "/curatedEvents/public/calendar/" + church.id + "/" + id).catch(() => null)));
+        const events = calendars.flatMap((c) => (Array.isArray(c) ? c as EventInterface[] : []));
+        await EventHelper.ensureInitialized();
+        const now = new Date();
+        const occurrences = buildOccurrences(events, now, new Date(now.getTime() + EVENT_WINDOW_DAYS * 24 * 60 * 60 * 1000), 1);
+        occurrences.forEach((o) => { const id = eventPageId(o.event); if (id) urls.set("/events/" + encodeURIComponent(id), undefined); });
+      }
 
       const sermons: SitemapSermon[] | null = await getJson(contentApi + "/sermons/public/" + church.id);
       if (Array.isArray(sermons)) {

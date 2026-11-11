@@ -3,7 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Box, Dialog, DialogActions, DialogContent, IconButton, InputBase, Stack, Typography, useMediaQuery } from "@mui/material";
+import { Box, Button, Dialog, DialogActions, DialogContent, IconButton, InputBase, Stack, Typography, useMediaQuery } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material/styles";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
@@ -11,13 +11,13 @@ import CloseIcon from "@mui/icons-material/Close";
 import SearchIcon from "@mui/icons-material/Search";
 import { Locale, PersonHelper } from "@churchapps/apphelper";
 import type { PersonInterface } from "@churchapps/helpers";
-import { mobileTheme } from "./mobileTheme";
+import { mobileTheme, onBackgroundVars } from "./mobileTheme";
 import { getInitials } from "./util";
 
 const tc = mobileTheme.colors;
 
 export const PageHead = ({ title, lede, children, sx }: { title: React.ReactNode; lede?: React.ReactNode; children?: React.ReactNode; sx?: SxProps<Theme> }) => (
-  <Box sx={[{ px: { xs: "16px", md: 0 }, pt: { xs: "4px", md: 0 }, pb: { xs: "18px", md: "24px" } }, ...(Array.isArray(sx) ? sx : [sx])]}>
+  <Box sx={[{ ...onBackgroundVars, px: { xs: "16px", md: 0 }, pt: { xs: "4px", md: 0 }, pb: { xs: "18px", md: "24px" } }, ...(Array.isArray(sx) ? sx : [sx])]}>
     <Typography component="h1" sx={{ fontSize: { xs: 28, md: 30 }, lineHeight: { xs: "34px", md: "36px" }, fontWeight: 650, letterSpacing: "-0.02em", color: tc.text, overflowWrap: "anywhere" }}>
       {title}
     </Typography>
@@ -25,6 +25,18 @@ export const PageHead = ({ title, lede, children, sx }: { title: React.ReactNode
     {children && <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: "8px", mt: "16px", alignItems: "center" }}>{children}</Stack>}
   </Box>
 );
+
+// Signed-out stand-in for screens that only make sense with an account; sign-in returns here.
+export const SignInPrompt = ({ title, lede }: { title: string; lede: string }) => {
+  const pathname = usePathname();
+  return (
+    <PageHead title={title} lede={lede}>
+      <Button variant="contained" href={pathname ? `/mobile/login?returnUrl=${encodeURIComponent(pathname)}` : "/mobile/login"}>
+        {Locale.label("mobile.components.signIn")}
+      </Button>
+    </PageHead>
+  );
+};
 
 export const Plate = ({ children, sx, className, ...rest }: { children: React.ReactNode; sx?: SxProps<Theme> } & Omit<React.HTMLAttributes<HTMLDivElement>, "color">) => (
   <Box
@@ -83,11 +95,11 @@ export const TextLink = ({ href, onClick, children, danger, disabled, sx, ...res
   return <Box component="button" type="button" onClick={onClick} disabled={disabled} sx={style} {...(rest as React.ButtonHTMLAttributes<HTMLButtonElement>)}>{children}</Box>;
 };
 
-export const PlateSection = ({ title, action, children, sx, id }: { title?: React.ReactNode; action?: React.ReactNode; children?: React.ReactNode; sx?: SxProps<Theme>; id?: string }) => {
+export const PlateSection = ({ title, action, children, sx, id, "data-testid": testId }: { title?: React.ReactNode; action?: React.ReactNode; children?: React.ReactNode; sx?: SxProps<Theme>; id?: string; "data-testid"?: string }) => {
   const autoId = React.useId();
   const headingId = id ? `${id}-h` : autoId;
   return (
-    <Box component="section" id={id} aria-labelledby={title ? headingId : undefined} className="plate-sec" sx={[{ px: { xs: "16px", md: "24px" }, py: { xs: "18px", md: "22px" } }, ...(Array.isArray(sx) ? sx : [sx])]}>
+    <Box component="section" id={id} data-testid={testId} aria-labelledby={title ? headingId : undefined} className="plate-sec" sx={[{ px: { xs: "16px", md: "24px" }, py: { xs: "18px", md: "22px" } }, ...(Array.isArray(sx) ? sx : [sx])]}>
       {(title || action) && (
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", mb: "10px", minHeight: 22 }}>
           {title ? <Eyebrow id={headingId}>{title}</Eyebrow> : <span />}
@@ -179,8 +191,8 @@ const toneColors: Record<BadgeTone, [string, string]> = {
   pri: [tc.chip, tc.onChip]
 };
 
-export const StatusBadge = ({ tone = "neu", dot, children }: { tone?: BadgeTone; dot?: boolean; children: React.ReactNode }) => (
-  <Box component="span" sx={{
+export const StatusBadge = ({ tone = "neu", dot, children, "data-testid": testId }: { tone?: BadgeTone; dot?: boolean; children: React.ReactNode; "data-testid"?: string }) => (
+  <Box component="span" data-testid={testId} sx={{
     display: "inline-flex",
     alignItems: "center",
     gap: "6px",

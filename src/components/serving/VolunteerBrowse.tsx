@@ -52,7 +52,7 @@ export function VolunteerBrowse({ signupPlans, defaultTitle }: Props) {
                   <Box>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>{plan.name}</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      {DateHelper.prettyDate(new Date(plan.serviceDate || ""))}
+                      {plan.serviceDate ? DateHelper.prettyDate(DateHelper.toDate(plan.serviceDate)) : ""}
                       {times.length > 0 && (" \u00b7 " + times.map(t => t.displayName).join(", "))}
                     </Typography>
                   </Box>
@@ -81,7 +81,7 @@ export function VolunteerBrowse({ signupPlans, defaultTitle }: Props) {
                 </Stack>
                 {remaining > 0 && (
                   <Box sx={{ mt: 2, textAlign: "right" }}>
-                    <Link href={`volunteer/${plan.id}`} passHref>
+                    <Link href={`/volunteer/${plan.id}`} passHref>
                       <Button variant="contained" size="small" sx={{ textTransform: "none", borderRadius: 2 }}>
                         {Locale.label("serving.viewAndSignUp")}
                       </Button>

@@ -41,6 +41,7 @@ export interface RegistrationPayment {
   paymentMethodId?: string;
   type?: string;
   currency?: string;
+  captchaPass?: string;
 }
 
 export interface WizardMember {
@@ -199,10 +200,10 @@ export function useEventRegistration({ churchId, eventId, event, isLoggedIn, per
   };
 
   const buildMembersPayload = (): WizardMember[] => {
-    if (!hasTypes) return members.map((m) => ({ firstName: m.firstName.trim(), lastName: m.lastName.trim(), ...(m.personId ? { personId: m.personId } : {}) }));
+    // The registrant is always the first attendee, with or without attendee types.
     const primary: WizardMember = { firstName: primaryFirstName.trim(), lastName: primaryLastName.trim() };
     if (isLoggedIn && person?.id) primary.personId = person.id;
-    if (primaryTypeId) primary.registrationTypeId = primaryTypeId;
+    if (hasTypes && primaryTypeId) primary.registrationTypeId = primaryTypeId;
     const extra = members.map((m) => {
       const out: WizardMember = { firstName: m.firstName.trim(), lastName: m.lastName.trim() };
       if (m.personId) out.personId = m.personId;
@@ -309,7 +310,7 @@ export function useEventRegistration({ churchId, eventId, event, isLoggedIn, per
         setAppliedCoupon({ code, discountType: result.discountType, value: Number(result.value) });
       } else {
         setAppliedCoupon(null);
-        setCouponError(Locale.label("registration.coupon." + (result?.reason || "invalid")) || Locale.label("registration.coupon.invalid"));
+        setCouponError(Locale.label("registration.coupon." + (result?.reason || "invalid"), Locale.label("registration.coupon.invalid")));
       }
     } catch {
       setAppliedCoupon(null);
@@ -416,8 +417,11 @@ export function useEventRegistration({ churchId, eventId, event, isLoggedIn, per
       setRegistration(result);
       setStep("confirm");
       return result;
-    } catch {
-      setError(Locale.label("registration.errors.registrationFailed"));
+    } catch (e: any) {
+      // ApiHelper throws on a refusal with the response body as the message; show the server's reason.
+      let body: any = null;
+      try { body = JSON.parse(e?.message); } catch { /* not a JSON body */ }
+      setError(mapError(body));
       return null;
     } finally {
       setIsSubmitting(false);

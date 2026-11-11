@@ -8,10 +8,14 @@ import { isValidHex as isValidHexColor, mix } from "@/helpers/colorTints";
 
 export type MobileThemeMode = "light" | "dark";
 
+// chip = the other variant was the only one uploaded, so it needs its own backdrop to stay visible.
+export interface BrandLogo { src: string; chip?: string }
+
 interface MobileThemeContextValue {
   mode: MobileThemeMode;
   toggle: () => void;
   setMode: (mode: MobileThemeMode) => void;
+  logos: { bar?: BrandLogo; header?: BrandLogo };
 }
 
 const STORAGE_KEY = "b1mobile.theme";
@@ -19,7 +23,8 @@ const STORAGE_KEY = "b1mobile.theme";
 const MobileThemeContext = createContext<MobileThemeContextValue>({
   mode: "light",
   toggle: () => {},
-  setMode: () => {}
+  setMode: () => {},
+  logos: {}
 });
 
 export const useMobileThemeMode = () => useContext(MobileThemeContext);
@@ -66,6 +71,14 @@ const lum = (hex: string) => {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 
+// A church text color picked for its white surface can vanish on a dark custom background (ICOM: #3c3c3c on #1c1c5e).
+const isDark = (bg: string) => lum(bg) <= 0.18;
+const readableOn = (fg: string, bg: string, light = "#FFFFFF", dark = "#141b24") => {
+  const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+  if ((hi + 0.05) / (lo + 0.05) >= 3) return fg;
+  return isDark(bg) ? light : dark;
+};
+
 // Soft Blue (B1Admin default theme) with the church primary standing in for B1 blue: every surface,
 // hairline, chip and the desktop header are mixed from that one color; status colors stay fixed.
 const buildThemeVars = (mode: MobileThemeMode, config?: ConfigurationInterface) => {
@@ -100,6 +113,9 @@ const buildThemeVars = (mode: MobileThemeMode, config?: ConfigurationInterface) 
     "--mb-surface": surface,
     "--mb-surface-variant": background,
     "--mb-text": text,
+    "--mb-on-background": readableOn(text, background),
+    "--mb-on-background-muted": readableOn(muted, background, "#C9D0DC", "#4B5563"),
+    "--mb-link-on-background": readableOn(dark ? mix(brand, W, 0.5) : mix(brand, K, 0.08), background, mix(brand, W, 0.7)),
     "--mb-text-secondary": muted,
     "--mb-text-muted": muted,
     "--mb-text-hint": control,
@@ -185,8 +201,19 @@ export const MobileThemeProvider: React.FC<{ children: React.ReactNode; config?:
     });
   }, []);
 
-  const value = useMemo<MobileThemeContextValue>(() => ({ mode, toggle, setMode }), [mode, toggle, setMode]);
   const vars = useMemo(() => buildThemeVars(mode, config), [mode, config]);
+  // logoLight is drawn for light backgrounds, logoDark for dark.
+  const logos = useMemo(() => {
+    const a = config?.appearance as { logoLight?: string; logoDark?: string } | undefined;
+    const light = a?.logoLight ? { src: a.logoLight, chip: "#FFFFFF" } : undefined;
+    const dark = a?.logoDark ? { src: a.logoDark, chip: "#141b24" } : undefined;
+    const pick = (bg: string): BrandLogo | undefined => {
+      const [match, other] = isDark(bg) ? [dark, light] : [light, dark];
+      return match ? { src: match.src } : other;
+    };
+    return { bar: pick(vars["--mb-background"]), header: pick(vars["--mb-header"]) };
+  }, [config, vars]);
+  const value = useMemo<MobileThemeContextValue>(() => ({ mode, toggle, setMode, logos }), [mode, toggle, setMode, logos]);
   const muiTheme = useMemo(() => createTheme({
     palette: {
       mode,

@@ -8,6 +8,8 @@ import { ElementInterface, SectionInterface } from "@/helpers";
 import { LiveStream } from "./video/LiveStream";
 import { FormElement } from "./elements/FormElement";
 import { UpcomingEventsElement } from "./elements/UpcomingEventsElement";
+import { GroupListElement } from "./elements/GroupListElement";
+import { GroupsBrowserElement } from "./elements/GroupsBrowserElement";
 import { eventPageId } from "@/helpers/EventOccurrences";
 import { b1ImageOptimizer } from "@/helpers/imageOptimizer";
 
@@ -48,6 +50,10 @@ registerElementRenderer("calendar", (p) => {
   const eventUrl: any = { eventUrl: (e: EventInterface) => "/events/" + eventPageId(e) };
   return <CalendarElement key={p.element.id} element={p.element} churchId={churchId} firstDayOfWeek={(p.church as any)?.firstDayOfWeek ?? 0} {...eventUrl} />;
 });
+// Group List: a grid, or one row that scrolls by itself when the layout is "autoscroll".
+registerElementRenderer("groupList", (p) => <GroupListElement key={p.element.id} element={p.element as ElementInterface} churchId={p.church?.id || p.element.churchId || ""} />);
+// Groups Browser: same choice of grid or automatic scrolling row.
+registerElementRenderer("groups", (p) => <GroupsBrowserElement key={p.element.id} element={p.element as ElementInterface} churchId={p.church?.id || p.element.churchId || ""} />);
 
 // Route apphelper content images through the Next.js image optimizer (srcset/WebP/AVIF).
 setImageOptimizer(b1ImageOptimizer);

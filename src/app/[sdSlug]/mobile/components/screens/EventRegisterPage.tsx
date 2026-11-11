@@ -20,7 +20,7 @@ import RemoveIcon from "@mui/icons-material/Remove";
 import PersonAddIcon from "@mui/icons-material/PersonAdd";
 import { ApiHelper, DateHelper, Locale } from "@churchapps/apphelper";
 import { FormSubmissionEdit } from "@churchapps/apphelper/forms";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EventInterface, FormSubmissionInterface } from "@churchapps/helpers";
 import UserContext from "@/context/UserContext";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
@@ -41,11 +41,12 @@ const formatEventTime = (event: EventInterface) => {
   if (!event.start) return "";
   const start = new Date(event.start);
   if (isNaN(start.getTime())) return "";
-  if (event.allDay) return DateHelper.prettyDate(start);
-  if (!event.end) return DateHelper.prettyDateTime(start);
-  const end = new Date(event.end);
-  if (isNaN(end.getTime())) return DateHelper.prettyDateTime(start);
-  return `${DateHelper.prettyDateTime(start)} - ${DateHelper.prettyTime(end)}`;
+  const end = event.end ? new Date(event.end) : null;
+  const validEnd = end && !isNaN(end.getTime()) ? end : null;
+  const sameDay = !validEnd || DateHelper.prettyDate(start) === DateHelper.prettyDate(validEnd);
+  if (event.allDay) return sameDay ? DateHelper.prettyDate(start) : `${DateHelper.prettyDate(start)} - ${DateHelper.prettyDate(validEnd)}`;
+  if (!validEnd) return DateHelper.prettyDateTime(start);
+  return `${DateHelper.prettyDateTime(start)} - ${sameDay ? DateHelper.prettyTime(validEnd) : DateHelper.prettyDateTime(validEnd)}`;
 };
 
 const StatusPlate = ({ title, heading, body }: { title: string; heading: string; body: string }) => (
@@ -69,6 +70,8 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
   const userContext = useContext(UserContext);
   const churchId = config?.church?.id || "";
   const person = userContext?.userChurch?.person;
+  // The login's userChurch.person carries only the id; the full profile (name, email) is userContext.person.
+  const profile = userContext?.person;
   const personId = person?.id;
   const personName = person?.name?.display || userContext?.person?.name?.display
     || [person?.name?.first, person?.name?.last].filter(Boolean).join(" ") || "";
@@ -95,8 +98,13 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
     eventId,
     event: event || {},
     isLoggedIn,
-    person: { id: personId, email: person?.contactInfo?.email, firstName: person?.name?.first, lastName: person?.name?.last, householdId: userContext?.person?.householdId }
+    person: { id: personId, email: person?.contactInfo?.email || profile?.contactInfo?.email, firstName: person?.name?.first || profile?.name?.first, lastName: person?.name?.last || profile?.name?.last, householdId: profile?.householdId }
   });
+
+  // A new registration changes the status Home, Me and the group event cards show.
+  const queryClient = useQueryClient();
+  const registrationId = reg.registration?.id;
+  useEffect(() => { if (registrationId) void queryClient.invalidateQueries({ queryKey: ["/registrations/person"] }); }, [registrationId, queryClient]);
 
   const handleBack = () => navigateBack(router, "/mobile/dashboard");
 
@@ -161,6 +169,11 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
 
   if (reg.step === "confirm" && reg.registration) {
     const waitlisted = reg.registration.status === "waitlisted";
+    const pending = reg.registration.status === "pending";
+    const balance = (reg.registration.totalAmount || 0) - (reg.registration.amountPaid || 0);
+    const heading = waitlisted ? Locale.label("registration.waitlist.confirmedTitle") : pending ? Locale.label("registration.pendingTitle") : Locale.label("registration.confirmed");
+    const badge = waitlisted ? Locale.label("mobile.registrations.statusWaitlisted") : pending ? Locale.label("mobile.registrations.statusPending") : Locale.label("mobile.registrations.statusRegistered");
+    const body = waitlisted ? Locale.label("registration.waitlist.confirmedBody") : pending ? Locale.label("registration.pendingBody") : Locale.label("registration.youAreRegistered");
     return (
       <Box>
         {head}
@@ -168,16 +181,21 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
           <PlateSection>
             <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
               <Typography component="h2" sx={{ fontSize: 18, fontWeight: 650, color: tc.text }}>
-                {waitlisted ? Locale.label("registration.waitlist.confirmedTitle") : Locale.label("registration.confirmed")}
+                {heading}
               </Typography>
-              <StatusBadge tone={waitlisted ? "warn" : "ok"} dot={!waitlisted}>
-                {waitlisted ? Locale.label("mobile.registrations.statusWaitlisted") : Locale.label("mobile.registrations.statusRegistered")}
+              <StatusBadge tone={waitlisted || pending ? "warn" : "ok"} dot={!waitlisted && !pending}>
+                {badge}
               </StatusBadge>
             </Box>
             <QuietEmpty sx={{ mt: "4px" }}>
-              {waitlisted ? Locale.label("registration.waitlist.confirmedBody") : Locale.label("registration.youAreRegistered")} {event.title}
+              {body} {event.title}
             </QuietEmpty>
-            {reg.registration.totalAmount > 0 && (
+            {pending && balance > 0 && (
+              <Typography sx={{ mt: "8px", fontSize: 14, color: tc.text }}>
+                {Locale.label("mobile.registrations.balanceOf").replace("{}", formatMoney(balance)).replace("{}", formatMoney(reg.registration.totalAmount))}
+              </Typography>
+            )}
+            {reg.registration.totalAmount > 0 && !pending && (
               <Typography sx={{ mt: "8px", fontSize: 14, color: tc.textSecondary }}>
                 {Locale.label("registration.payment.total")}: {formatMoney(reg.registration.amountPaid || 0)} / {formatMoney(reg.registration.totalAmount)}
               </Typography>
@@ -221,7 +239,7 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
             <RegistrationPaymentForm
               churchId={churchId}
               personId={isLoggedIn ? personId : undefined}
-              personEmail={isLoggedIn ? person?.contactInfo?.email : reg.guestEmail}
+              personEmail={isLoggedIn ? person?.contactInfo?.email || profile?.contactInfo?.email : reg.guestEmail}
               personName={`${reg.primaryFirstName} ${reg.primaryLastName}`.trim()}
               amount={reg.total}
               currency={(event as any).currency}
@@ -237,6 +255,7 @@ export const EventRegisterPage = ({ eventId, config }: Props) => {
               onPay={(p) => reg.submit(p)}
               onFinalized={(result) => reg.finishConfirm(result)}
               onBack={() => reg.setStep(reg.hasSelections ? "selections" : "members")}
+              onPayLater={() => reg.submit()}
             />
           </PlateSection>
           {eventSection}

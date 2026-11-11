@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useContext } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, Button, CircularProgress, IconButton, Skeleton, Typography } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -11,10 +11,12 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ViewListIcon from "@mui/icons-material/ViewList";
 import { ApiHelper, Locale, PersonHelper, UserHelper } from "@churchapps/apphelper";
 import type { PersonInterface } from "@churchapps/helpers";
+import UserContext from "@/context/UserContext";
 import { EnvironmentHelper } from "@/helpers/EnvironmentHelper";
 import { rotateWeekdays, weekdayColumn } from "@/helpers/firstDayOfWeek";
 import { mobileTheme } from "../mobileTheme";
 import { EventProcessor } from "../../helpers/eventProcessor";
+import { useMyRegistrations } from "../../helpers/myRecords";
 import { MarkdownPreviewLight } from "@churchapps/apphelper/markdown";
 import { DateHelper } from "@churchapps/helpers";
 import { Eyebrow, FilterPills, PersonAvatar, PlateSection, QuietEmpty, Sheet, StatusBadge, TextLink, type BadgeTone, ViewToggle } from "../kit";
@@ -52,6 +54,7 @@ export interface EventRow {
   tags?: string;
   registrationEnabled?: boolean;
   rsvpDisabled?: boolean;
+  photoUrl?: string;
 }
 
 type ViewMode = "month" | "list";
@@ -205,6 +208,17 @@ const RsvpButtons = ({ e, rsvp }: { e: EventRow; rsvp: RsvpState }) => {
   );
 };
 
+// Register link, or the member's registration status once they have one.
+const RegisterAction = ({ eventId }: { eventId: string }) => {
+  const context = useContext(UserContext);
+  const personId = context?.person?.id || context?.userChurch?.person?.id;
+  const { data: registrations = [] } = useMyRegistrations(personId, !!context?.user);
+  const mine = registrations.find((r) => r.eventId === eventId && r.status !== "cancelled");
+  if (!mine) return <TextLink href={`/mobile/register/${eventId}`}>{Locale.label("mobile.group.register")}</TextLink>;
+  const [tone, label]: [BadgeTone, string] = mine.status === "waitlisted" ? ["pri", "mobile.registrations.statusWaitlisted"] : mine.status === "pending" ? ["warn", "mobile.registrations.statusPending"] : ["ok", "mobile.registrations.statusRegistered"];
+  return <TextLink href="/mobile/registrations"><StatusBadge tone={tone}>{Locale.label(label)}</StatusBadge></TextLink>;
+};
+
 // Plate teaser: the next occurrence with inline RSVP.
 export const GroupNextEvent = ({ groupId, isMember }: { groupId: string; isMember: boolean }) => {
   const { data: rawEvents, isLoading } = useGroupEvents(groupId);
@@ -234,7 +248,7 @@ export const GroupNextEvent = ({ groupId, isMember }: { groupId: string; isMembe
     <Box data-testid="group-next-event">
       <Typography sx={{ fontSize: 17, lineHeight: "24px", fontWeight: 600, color: tc.text }}>{next.title || Locale.label("mobile.group.event")}</Typography>
       <Typography sx={{ fontSize: 13.5, lineHeight: "19px", color: tc.textSecondary }}>{meta}</Typography>
-      {(next.registrationEnabled && next.id) && <Box sx={{ mt: "10px" }}><TextLink href={`/mobile/register/${next.id}`}>{Locale.label("mobile.group.register")}</TextLink></Box>}
+      {(next.registrationEnabled && next.id) && <Box sx={{ mt: "10px" }}><RegisterAction eventId={next.id} /></Box>}
       {isMember && canRsvp(next) && <Box sx={{ mt: "12px" }}><RsvpButtons e={next} rsvp={rsvp} /></Box>}
     </Box>
   );
@@ -358,6 +372,8 @@ export const GroupCalendarTab = ({ groupId, canManage, isMember, onAddEvent, onE
     ].filter(Boolean).join(" · ");
     const occ = e.start ? new Date(e.start) : null;
     const showRsvp = canRsvp(e) && !!occ && !isNaN(occ.getTime());
+    // Answering is for what's still ahead; leaders can still look back at who came.
+    const ended = new Date(e.end || e.start || "").getTime() < Date.now();
     return (
       <Box key={`${e.id || "ev"}-${i}`} sx={{ py: "12px", "& + &": { borderTop: `1px solid ${tc.border}` } }}>
         <Box sx={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
@@ -378,11 +394,11 @@ export const GroupCalendarTab = ({ groupId, canManage, isMember, onAddEvent, onE
           </Box>
         )}
         {e.registrationEnabled && e.id && (
-          <Box sx={{ mt: "8px" }}><TextLink href={`/mobile/register/${e.id}`}>{Locale.label("mobile.group.register")}</TextLink></Box>
+          <Box sx={{ mt: "8px" }}><RegisterAction eventId={e.id} /></Box>
         )}
-        {showRsvp && (isMember || canManage) && (
+        {showRsvp && ((isMember && !ended) || canManage) && (
           <Box sx={{ mt: "10px", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }} data-testid={`rsvp-${e.id}`}>
-            {isMember && <RsvpButtons e={e} rsvp={rsvp} />}
+            {isMember && !ended && <RsvpButtons e={e} rsvp={rsvp} />}
             {canManage && (
               <TextLink onClick={() => setRosterFor({ eventId: e.id!, occurrenceStart: occ!.toISOString(), title: e.title || Locale.label("mobile.group.event") })} data-testid={`rsvp-roster-${e.id}`}>
                 {Locale.label("mobile.group.rsvpViewResponses")}
@@ -536,12 +552,14 @@ const RsvpRosterSheet = ({ target, onClose }: { target: RosterTarget | null; onC
       .catch(() => { /* names fall back to Unknown */ });
   }, [roster]);
 
+  const rank = new Map(Object.keys(people).map((id, i) => [id, i]));
+
   return (
     <Sheet open={!!target} onClose={onClose} title={Locale.label("mobile.group.rsvpResponses")} maxWidth="xs">
       {isLoading && <Skeleton variant="rounded" height={80} />}
       {!isLoading && roster.length === 0 && <QuietEmpty>{Locale.label("mobile.group.rsvpNoResponses")}</QuietEmpty>}
       {!isLoading && rsvpOptions().map((g) => {
-        const rows = roster.filter((r) => r.response === g.value);
+        const rows = roster.filter((r) => r.response === g.value).sort((a, b) => (rank.get(a.personId) ?? Infinity) - (rank.get(b.personId) ?? Infinity));
         if (rows.length === 0) return null;
         return (
           <Box key={g.value} sx={{ mb: "16px" }}>

@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request, type APIRequestContext, type Page } from "@playwright/test";
 import { mobileLogoutButton } from "./helpers/mobile";
 
 test.describe("Mobile donate", () => {
@@ -52,6 +52,102 @@ test.describe("Mobile donate", () => {
   });
 });
 
+// Issue #1315: B1Admin > Settings > Giving limits which years members see and can print, and adds a giving note.
+test.describe.serial("Mobile donate member giving settings", () => {
+  const MAIN_API = process.env.API_BASE || "http://localhost:8084";
+  const APP = process.env.BASE_URL || "http://grace.localtest.me:3301";
+  const NOTE = "Refunds are handled by the church office.";
+  const year = new Date().getFullYear();
+
+  const saveSettings = async (values: Record<string, string>) => {
+    const ctx = await request.newContext();
+    const login = await (await ctx.post(`${MAIN_API}/membership/users/login`, { data: { email: "demo@b1.church", password: "password" } })).json();
+    const uc = (login.userChurches || []).find((c: any) => c.church?.id === "CHU00000001");
+    const headers = { Authorization: `Bearer ${uc.jwt}` };
+    const all = await (await ctx.get(`${MAIN_API}/membership/settings`, { headers })).json();
+    const rows = Object.entries(values).map(([keyName, value]) => ({ ...((all as any[]).find(s => s.keyName === keyName) || { churchId: "CHU00000001", keyName }), public: 1, value }));
+    const res = await ctx.post(`${MAIN_API}/membership/settings`, { headers, data: rows });
+    if (!res.ok()) throw new Error(`settings save failed: ${res.status()}`);
+    await ctx.post(`${APP}/api/revalidate/grace`);
+    await ctx.dispose();
+  };
+
+  test.afterAll(async () => { await saveSettings({ memberGivingYears: "", givingNote: "", logoLight: "" }); });
+
+  test("shows the church's giving note on the giving page and history", async ({ page }) => {
+    await saveSettings({ memberGivingYears: "", givingNote: NOTE });
+    await page.goto("/mobile/donate");
+    await expect(page.getByTestId("giving-note")).toHaveText(NOTE, { timeout: 30000 });
+    await page.goto("/mobile/donate?view=history");
+    await expect(page.getByTestId("giving-note")).toHaveText(NOTE, { timeout: 30000 });
+  });
+
+  test("hides history, totals and statements when the church turns them off", async ({ page }) => {
+    await saveSettings({ memberGivingYears: "off", givingNote: "" });
+    await page.goto("/mobile/donate");
+    const main = page.locator("main");
+    await expect(main.getByRole("button", { name: /^Give$/ })).toBeVisible({ timeout: 30000 });
+    await expect(main.getByRole("link", { name: /All history/i })).toHaveCount(0);
+    await expect(main.getByRole("heading", { name: /Recent Activity/i })).toHaveCount(0);
+    await expect(main.getByRole("button", { name: /Print Statement/i })).toHaveCount(0);
+  });
+
+  test("stops at the year the church allows, for viewing and printing", async ({ page }) => {
+    await saveSettings({ memberGivingYears: String(year - 1), givingNote: "" });
+    await page.goto("/mobile/donate?view=history");
+    const years = page.getByRole("group", { name: "Years" });
+    await expect(years.getByRole("button", { name: String(year - 1), exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(years.getByRole("button", { name: String(year), exact: true })).toHaveCount(0);
+    await page.goto(`/mobile/donate/print?year=${year}`);
+    await expect(page.getByText(/giving statement isn't available/i)).toBeVisible({ timeout: 30000 });
+  });
+
+  // Issue #1437: the member's statement carries the admin statement's note and disclaimer, centered with margins.
+  test("printed statement has the note, disclaimer and giving note, centered", async ({ page }) => {
+    await saveSettings({ memberGivingYears: "", givingNote: NOTE });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => { window.print = () => {}; window.close = () => {}; window.history.back = () => {}; });
+    await page.goto(`/mobile/donate/print?year=${year}`);
+    const note = page.getByTestId("statement-note");
+    await expect(note).toBeVisible({ timeout: 30000 });
+    await expect(note).toContainText(`summarizes all contributions received by`);
+    await expect(note).toContainText(`during ${year}.`);
+    const disclaimer = page.getByTestId("statement-disclaimer");
+    await expect(disclaimer).toContainText("No goods or services were provided");
+    await expect(page.getByTestId("statement-giving-note")).toHaveText(NOTE);
+    const order = await page.evaluate(() => ["statement-note", "statement-disclaimer", "statement-giving-note"]
+      .map((id) => document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect().top));
+    expect(order[0]).toBeLessThan(order[1]);
+    expect(order[1]).toBeLessThan(order[2]);
+    const title = page.getByRole("heading", { name: `${year} Annual Giving Statement` });
+    await expect(title).toHaveCSS("text-align", "center");
+    const box = await title.boundingBox();
+    expect(box!.x, "statement has a left margin").toBeGreaterThan(0);
+  });
+
+  // Issue #1440: the member's statement shows the church's light-background logo, like the admin statement.
+  test("printed statement shows the church logo above the title", async ({ page }) => {
+    const logo = `${APP}/images/logo.png`;
+    await saveSettings({ memberGivingYears: "", givingNote: "", logoLight: logo });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => { window.print = () => {}; window.close = () => {}; window.history.back = () => {}; });
+    await page.goto(`/mobile/donate/print?year=${year}`);
+    const img = page.getByTestId("print-church-logo");
+    await expect(img).toBeVisible({ timeout: 30000 });
+    await expect(img).toHaveAttribute("src", logo);
+    const title = page.getByRole("heading", { name: `${year} Annual Giving Statement` });
+    expect((await img.boundingBox())!.y).toBeLessThan((await title.boundingBox())!.y);
+  });
+
+  test("printed statement has no logo when the church has none", async ({ page }) => {
+    await saveSettings({ memberGivingYears: "", givingNote: "", logoLight: "" });
+    await page.addInitScript(() => { window.print = () => {}; window.close = () => {}; window.history.back = () => {}; });
+    await page.goto(`/mobile/donate/print?year=${year}`);
+    await expect(page.getByRole("heading", { name: `${year} Annual Giving Statement` })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId("print-church-logo")).toHaveCount(0);
+  });
+});
+
 // Mixed-currency giving: each gift keeps its own currency in the history list, but the Year-to-Date and
 // history totals are converted into the church currency (USD on Grace) with the Api's own exchange rates.
 // The expected figures are rebuilt from the Api's gifts + read-only rate table, so they follow the live rate.
@@ -71,7 +167,7 @@ test.describe.serial("Mobile donate mixed-currency totals", () => {
     return { headers: { Authorization: `Bearer ${uc.jwt}` } };
   };
 
-  const usd = (value: number) => "$ " + value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd = (value: number) => "$" + value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   test.beforeAll(async () => {
     const ctx = await request.newContext();
@@ -125,7 +221,7 @@ test.describe.serial("Mobile donate mixed-currency totals", () => {
     await allYears.click();
     await expect(page.getByTestId("giving-period-total")).toHaveText(expectedAllTime, { timeout: 30000 });
     await expect(page.getByTestId("giving-period-converted-note")).toHaveText(CONVERTED_NOTE);
-    await expect(page.locator("main")).toContainText("€ 100.00");
+    await expect(page.locator("main")).toContainText("€100.00");
   });
 });
 
@@ -193,6 +289,70 @@ test.describe.serial("Mobile donate statement receipt formats", () => {
   });
 });
 
+// A gift saved as a calendar date comes back as UTC midnight; the printed statement must show
+// the recorded day, not the day before, for a donor west of UTC.
+test.describe.serial("Mobile donate printed statement gift dates", () => {
+  test.use({ timezoneId: "America/Chicago", locale: "en-US" });
+
+  const MAIN_API = process.env.API_BASE || "http://localhost:8084";
+  const DEMO_PERSON_ID = "PER00000082";
+  const year = new Date().getFullYear();
+  const giftDate = `${year}-03-15`;
+  const created: { batch?: string; donation?: string } = {};
+
+  const apiAuth = async (ctx: Awaited<ReturnType<typeof request.newContext>>) => {
+    const res = await ctx.post(`${MAIN_API}/membership/users/login`, { data: { email: "demo@b1.church", password: "password" } });
+    const body = await res.json();
+    const uc = (body.userChurches || []).find((c: any) => c.church?.id === "CHU00000001");
+    return { headers: { Authorization: `Bearer ${uc.jwt}` } };
+  };
+
+  test.beforeAll(async () => {
+    const ctx = await request.newContext();
+    const auth = await apiAuth(ctx);
+    const [batch] = await (await ctx.post(`${MAIN_API}/giving/donationbatches`, { ...auth, data: [{ name: "Statement Date Batch", batchDate: giftDate }] })).json();
+    created.batch = batch.id;
+    const [donation] = await (await ctx.post(`${MAIN_API}/giving/donations`, {
+      ...auth,
+      data: [{ batchId: batch.id, personId: DEMO_PERSON_ID, donationDate: giftDate, amount: 13.81, method: "Check", methodDetails: "1381" }]
+    })).json();
+    created.donation = donation.id;
+    const fd = await ctx.post(`${MAIN_API}/giving/funddonations`, { ...auth, data: [{ donationId: donation.id, fundId: "FUN00000001", amount: 13.81 }] });
+    expect(fd.ok()).toBeTruthy();
+    await ctx.dispose();
+  });
+
+  test.afterAll(async () => {
+    const ctx = await request.newContext();
+    const auth = await apiAuth(ctx);
+    if (created.donation) await ctx.delete(`${MAIN_API}/giving/donations/${created.donation}`, auth);
+    if (created.batch) await ctx.delete(`${MAIN_API}/giving/donationbatches/${created.batch}`, auth);
+    await ctx.dispose();
+  });
+
+  test("statement row shows the recorded gift date", async ({ page }) => {
+    // The print page auto-prints then routes back; keep it on screen to assert.
+    await page.addInitScript(() => {
+      window.print = () => {};
+      window.close = () => {};
+      window.history.back = () => {};
+      window.history.go = () => {};
+    });
+    // Prod's Api runs in UTC and sends a calendar date as UTC midnight; a local Api west of UTC sends
+    // local midnight instead, which hides the bug. Pin the gift to the prod wire shape.
+    await page.route(/\/giving\/donations\/my(\?|$)/, async (route) => {
+      const res = await route.fetch();
+      const gifts: any[] = await res.json();
+      for (const g of gifts) if (g.id === created.donation) g.donationDate = `${giftDate}T00:00:00.000Z`;
+      await route.fulfill({ response: res, json: gifts });
+    });
+    await page.goto(`/mobile/donate/print?year=${year}`);
+    const row = page.locator("tr").filter({ hasText: "13.81" });
+    await expect(row).toHaveCount(1, { timeout: 30000 });
+    await expect(row.locator("td").first()).toHaveText(`Mar 15, ${year}`);
+  });
+});
+
 test.describe("Public donate page links", () => {
   test("login button and help link point at current destinations", async ({ page }) => {
     await page.context().clearCookies();
@@ -201,5 +361,101 @@ test.describe("Public donate page links", () => {
     await expect(login).toBeVisible({ timeout: 30000 });
     await expect(page.locator('a[href="/mobile/login?returnUrl=/mobile/donate"]')).toBeVisible();
     await expect(page.getByTestId("donate-instructions-link")).toHaveAttribute("href", /b1-church\/giving\/making-donations/);
+  });
+});
+
+// Lessons.church (CHU00000099) records gifts but has no payment gateway. A signed-in member still sees
+// their history, year total and Print Statement on Giving, Me and Home; only online giving is hidden.
+test.describe.serial("Mobile donate without online giving", () => {
+  test.use({ storageState: { cookies: [], origins: [] }, baseURL: (process.env.BASE_URL || "http://grace.localtest.me:3301").replace("grace.", "lessonschurch.") });
+
+  const MAIN_API = process.env.API_BASE || "http://localhost:8084";
+  const CHURCH = "CHU00000099";
+  const EMAIL = "lessons-admin@demo.churchapps.org";
+  const PERSON = "PER00000099";
+
+  let ctx: APIRequestContext;
+  let headers: Record<string, string>;
+  const created: { fund?: string; batch?: string; donation?: string; link?: string } = {};
+
+  test.beforeAll(async () => {
+    ctx = await request.newContext();
+    const login = await (await ctx.post(`${MAIN_API}/membership/users/login`, { data: { email: EMAIL, password: "password" } })).json();
+    const uc = login.userChurches.find((c: any) => c.church?.id === CHURCH);
+    headers = { Authorization: `Bearer ${uc.jwt}` };
+    const configured = await (await ctx.get(`${MAIN_API}/giving/gateways/configured/${CHURCH}`)).json();
+    expect(configured.configured).toBe(false);
+
+    const [fund] = await (await ctx.post(`${MAIN_API}/giving/funds`, { headers, data: [{ name: "E2E General Fund", taxDeductible: true }] })).json();
+    created.fund = fund.id;
+    const [batch] = await (await ctx.post(`${MAIN_API}/giving/donationbatches`, { headers, data: [{ name: "E2E Check Batch", batchDate: new Date() }] })).json();
+    created.batch = batch.id;
+    const [donation] = await (await ctx.post(`${MAIN_API}/giving/donations`, {
+      headers,
+      data: [{ batchId: batch.id, personId: PERSON, donationDate: new Date(), amount: 75, method: "Check", methodDetails: "1001" }]
+    })).json();
+    created.donation = donation.id;
+    const fd = await ctx.post(`${MAIN_API}/giving/funddonations`, { headers, data: [{ donationId: donation.id, fundId: fund.id, amount: 75 }] });
+    expect(fd.ok()).toBeTruthy();
+
+    // Home only teases giving when the church's app nav has a donation link.
+    const [link] = await (await ctx.post(`${MAIN_API}/content/links`, {
+      headers,
+      data: [{ churchId: CHURCH, category: "b1Tab", linkType: "donation", text: "Giving", sort: 20, visibility: "everyone" }]
+    })).json();
+    created.link = link.id;
+  });
+
+  test.afterAll(async () => {
+    if (created.link) await ctx.delete(`${MAIN_API}/content/links/${created.link}`, { headers });
+    if (created.donation) await ctx.delete(`${MAIN_API}/giving/donations/${created.donation}`, { headers });
+    if (created.batch) await ctx.delete(`${MAIN_API}/giving/donationbatches/${created.batch}`, { headers });
+    if (created.fund) await ctx.delete(`${MAIN_API}/giving/funds/${created.fund}`, { headers });
+    await ctx.dispose();
+  });
+
+  const signIn = async (page: Page) => {
+    await page.goto("/mobile/login");
+    await page.locator('input[type="email"]').first().fill(EMAIL);
+    await page.locator('input[type="password"]').first().fill("password");
+    await page.locator('button[type="submit"]').first().click();
+    await page.waitForURL(/\/mobile\/dashboard/, { timeout: 30000 });
+  };
+
+  test("member sees recorded gifts and Print Statement without online giving", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/mobile/donate");
+    const main = page.locator("main");
+    await expect(main.getByTestId("giving-ytd-total")).toContainText(/\$\s?75\.00/, { timeout: 30000 });
+    await expect(main.getByRole("button", { name: "Print Statement" })).toBeVisible();
+    await expect(main.getByRole("button", { name: "Give", exact: true })).toHaveCount(0);
+  });
+
+  test("statement header does not overlap at phone width", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => { window.print = () => {}; window.history.back = () => {}; });
+    await signIn(page);
+    await page.goto("/mobile/donate/print");
+    const email = page.getByText(EMAIL, { exact: true });
+    await expect(email).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("heading", { name: "Lessons.church Free Curriculum" })).toBeVisible();
+    const fits = await email.evaluate((el) => el.scrollWidth <= el.clientWidth);
+    expect(fits, "email overflows its column").toBe(true);
+  });
+
+  test("Me shows the giving shortcut without a gateway", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/mobile/me");
+    await expect(page.getByTestId("me-shortcut-donate")).toBeVisible({ timeout: 30000 });
+  });
+
+  test("Home shows the giving total without a Give button", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/mobile/dashboard");
+    await expect(page.getByTestId("home-giving-total")).toBeVisible({ timeout: 30000 });
+    const main = page.locator("main");
+    await expect(main.getByRole("button", { name: "Give", exact: true })).toHaveCount(0);
+    // The teaser's Give is a link styled as a button.
+    await expect(main.getByRole("link", { name: "Give", exact: true })).toHaveCount(0);
   });
 });

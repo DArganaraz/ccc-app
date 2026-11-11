@@ -14,12 +14,8 @@ concurrency:
   group: myconnect-image
   cancel-in-progress: false
 
-# Production addresses. Baked into the image at build time, so changing one means a rebuild.
-env:
-  API_URL: https://api.connectcity.church
-  SOCKET_URL: wss://api.connectcity.church
-  B1ADMIN_URL: https://admin.connectcity.church
-  B1APP_URL: https://my.connectcity.church
+# No addresses are baked in: the image is upstream's self-host build (the Dockerfile sets the
+# selfhost stage) and works out every URL from the browser's address at runtime.
 
 jobs:
   build:
@@ -48,12 +44,6 @@ jobs:
             ghcr.io/darganaraz/ccc-app:${{ steps.tag.outputs.sha }}
             ghcr.io/darganaraz/ccc-app:latest
           labels: org.opencontainers.image.source=https://github.com/DArganaraz/ccc-app
-          build-args: |
-            NEXT_PUBLIC_STAGE=custom
-            NEXT_PUBLIC_API_BASE=${{ env.API_URL }}
-            NEXT_PUBLIC_CONTENT_ROOT=${{ env.API_URL }}/content
-            NEXT_PUBLIC_MESSAGING_API_SOCKET=${{ env.SOCKET_URL }}
-            NEXT_PUBLIC_B1ADMIN_ROOT=${{ env.B1ADMIN_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -3,11 +3,12 @@ import React, { useContext, useEffect, useState } from "react";
 import UserContext from "@/context/UserContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import type { DonationInterface, FundDonationInterface, FundInterface } from "@churchapps/helpers";
-import { ApiHelper } from "@churchapps/apphelper";
+import { ApiHelper, Locale } from "@churchapps/apphelper";
 import { ArrayHelper, CurrencyHelper, DateHelper } from "@churchapps/helpers";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { loadChurchAppearance } from "../../loadChurchAppearance";
+import { memberGivingYearLimit } from "../../helpers/givingYears";
 
 type Params = Promise<{ sdSlug: string; }>;
 
@@ -41,9 +42,31 @@ export default function PrintPage({ params }: { params: Params }) {
   const [currency, setCurrency] = useState<string>("usd");
   const [churchSettings, setChurchSettings] = useState<Record<string, string>>({});
   const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({});
+  const [blocked, setBlocked] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [logoReady, setLogoReady] = useState(false);
+
+  // Wait for the church logo before printing so it isn't blank on paper, same as B1Admin's usePrintLogo.
+  const preloadLogo = (url: string) => {
+    if (!url) { setLogoReady(true); return; }
+    const img = new Image();
+    img.onload = () => setLogoReady(true);
+    img.onerror = () => setLogoReady(true);
+    img.src = url;
+    setTimeout(() => setLogoReady(true), 3000);
+  };
 
 
   const loadData = async () => {
+    const churchId = context?.userChurch?.church?.id;
+    const settings: Record<string, string> = (churchId && await ApiHelper.get("/settings/public/" + churchId, "MembershipApi").catch((): null => null)) || {};
+    setChurchSettings(settings);
+    if (settings.currency) setCurrency(settings.currency.toLowerCase());
+    preloadLogo(settings.logoLight || "");
+    if (currYear > memberGivingYearLimit(settings)) {
+      setBlocked(true);
+      return;
+    }
     const requests = [
       ApiHelper.get("/funds", "GivingApi").then((f: FundInterface[]) => { setFunds(f); }),
       ApiHelper.get("/fundDonations/my", "GivingApi").then((fd: FundDonationInterface[]) => { setFundDonations(fd); }),
@@ -63,13 +86,18 @@ export default function PrintPage({ params }: { params: Params }) {
       })
     ];
     await Promise.allSettled(requests);
+    setDataLoaded(true);
+  };
 
-    setTimeout(() => {
+  useEffect(() => {
+    if (!dataLoaded || !logoReady) return;
+    const t = setTimeout(() => {
       window.print();
       if (window.history.length > 1) router.back();
       else window.close();
     }, 300);
-  };
+    return () => clearTimeout(t);
+  }, [dataLoaded, logoReady]);
 
   const toStatementCurrency = (amount: number, donation: DonationInterface) =>
     CurrencyHelper.convertAmount(amount, donation?.currency || currency, currency, exchangeRates);
@@ -112,7 +140,7 @@ export default function PrintPage({ params }: { params: Params }) {
       const fund = ArrayHelper.getOne(funds, "id", fd.fundId);
       if (donation) {
         result.push(<tr key={fd.id || fd.donationId} style={{ height: "28px" }}>
-          <td style={{ borderBottom: "2px solid var(--print-accent)", borderRight: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "20%", paddingLeft: "5px" }}>{DateHelper.prettyDate(donation?.donationDate).toString()}</td>
+          <td style={{ borderBottom: "2px solid var(--print-accent)", borderRight: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "20%", paddingLeft: "5px" }}>{DateHelper.prettyDate(DateHelper.toDate(donation.donationDate))}</td>
           <td style={{ borderBottom: "2px solid var(--print-accent)", borderRight: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}>{donation?.method}</td>
           <td style={{ borderBottom: "2px solid var(--print-accent)", borderRight: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "45%", paddingLeft: "5px" }}>{fund?.name}</td>
           <td style={{ borderBottom: "2px solid var(--print-accent)", borderLeft: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "20%", paddingRight: "5px" }}>{CurrencyHelper.formatCurrencyWithLocale(fd.amount || 0, donation?.currency || currency)}</td>
@@ -143,12 +171,6 @@ export default function PrintPage({ params }: { params: Params }) {
     });
     return tableValues;
   };
-
-  const churchId = context?.userChurch?.church?.id;
-  useEffect(() => {
-    if (!churchId) return;
-    ApiHelper.get("/settings/public/" + churchId, "MembershipApi").then((s: Record<string, string>) => { setChurchSettings(s || {}); });
-  }, [churchId]);
 
   // ponytail: duplicate of B1Admin's GivingStatementDocument legal block. Ceiling: the two
   // templates drift apart. Upgrade path: move the statement document into apphelper.
@@ -194,84 +216,101 @@ export default function PrintPage({ params }: { params: Params }) {
   // giving requests or the print/router.back() timer while that redirect is in flight.
   useEffect(() => { if (context?.user) loadData(); }, [context?.user]);
 
+  const churchName = context?.userChurch?.church?.name || "";
+
+  if (blocked) return <AuthGuard sdSlug={sdSlug}><p style={{ padding: "24px", fontFamily: "Roboto, sans-serif" }}>{Locale.label("mobile.giving.statementUnavailable")}</p></AuthGuard>;
+
   return (
     <AuthGuard sdSlug={sdSlug}>
       <div style={{ margin: "0px", padding: "0px", height: "100%", width: "100%", backgroundColor: "white", fontFamily: "Roboto, sans-serif", ["--print-accent" as any]: accentColor }}>
+        <style>{`
+          .statement-page { max-width: 800px; margin: 0 auto; padding: 32px 40px; box-sizing: border-box; }
+          @media (max-width: 480px) { .statement-page { padding: 16px; } }
+          @media print { @page { margin: 0; } body { margin: 0; } }
+        `}</style>
         <div style={{ margin: "0px", padding: "0px", borderTop: "24px solid var(--print-accent)", width: "100%" }}></div>
 
-        <div style={{ margin: "0px", padding: "0px", width: "100%" }}>
-          <h1>{currYear} Annual Giving Statement</h1>
-          <p>Period: Jan 1 - Dec 31, {currYear}</p>
-          <p>Issued: {getDate()}</p>
-        </div>
-        <div style={{ margin: "0px", padding: "0px", borderTop: "2px solid var(--print-accent)", width: "80%" }}></div>
-
-        <div style={{ display: "flex" }}>
-          <div style={{ width: "50%" }}>
-            <h1>{context?.person?.name?.display}</h1>
-            <p>{context?.person?.contactInfo?.address1}</p>
-            <p>{context?.person?.contactInfo?.address2}</p>
-            <p>{context?.person?.contactInfo?.mobilePhone}</p>
-            <p>{context?.person?.contactInfo?.email}</p>
+        <div className="statement-page">
+          <div style={{ margin: "0px 0px 32px 0px", padding: "0px", width: "100%", textAlign: "center" }}>
+            {churchSettings.logoLight && <img src={churchSettings.logoLight} alt={churchName} data-testid="print-church-logo" style={{ display: "block", maxHeight: 60, maxWidth: 240, objectFit: "contain", margin: "0 auto 16px" }} />}
+            <h1>{currYear} Annual Giving Statement</h1>
+            <p>Period: Jan 1 - Dec 31, {currYear}</p>
+            <p>Issued: {getDate()}</p>
           </div>
-          <div style={{ width: "50%" }}>
-            <h1>{context?.userChurch?.church?.name}</h1>
-            <p>{context?.userChurch?.church?.address1}</p>
-            <p>{context?.userChurch?.church?.address2}</p>
-            <p>{context?.userChurch?.church?.city}, {context?.userChurch?.church?.country}, {context?.userChurch?.church?.zip}</p>
-          </div>
-        </div>
-        <div style={{ margin: "0px", padding: "0px", borderTop: "2px solid var(--print-accent)", width: "80%" }}></div>
+          <div style={{ margin: "0px", padding: "0px", borderTop: "2px solid var(--print-accent)", width: "100%" }}></div>
 
-        {legalBlock()}
-
-        <div>
-          <h1>Statement Summary:</h1>
-          <div style={{ display: "flex" }}>
-            <div style={{ width: "50%" }}>
-              <h2>Total Contributions:</h2>
-              <div style={{ height: "80px", lineHeight: "80px", width: "80%", textAlign: "center", border: "4px solid var(--print-accent)", fontSize: "40px" }}>{getTotalContributions()}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", columnGap: "16px", overflowWrap: "anywhere" }}>
+            <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+              <h1>{context?.person?.name?.display}</h1>
+              <p>{context?.person?.contactInfo?.address1}</p>
+              <p>{context?.person?.contactInfo?.address2}</p>
+              <p>{context?.person?.contactInfo?.mobilePhone}</p>
+              <p>{context?.person?.contactInfo?.email}</p>
             </div>
-            <div style={{ width: "50%" }}>
-              <h2>Funds:</h2>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead style={{ height: "24px" }}>
-                  <tr>
-                    <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "70%", paddingLeft: "5px" }}>Fund</th>
-                    <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "30%", paddingRight: "5px" }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tableFundTotal()}
-                </tbody>
-              </table>
+            <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+              <h1>{context?.userChurch?.church?.name}</h1>
+              <p>{context?.userChurch?.church?.address1}</p>
+              <p>{context?.userChurch?.church?.address2}</p>
+              <p>{context?.userChurch?.church?.city}, {context?.userChurch?.church?.country}, {context?.userChurch?.church?.zip}</p>
             </div>
           </div>
-        </div>
+          <div style={{ margin: "0px", padding: "0px", borderTop: "2px solid var(--print-accent)", width: "100%" }}></div>
 
-        <div>
-          <h1>Contribution Details:</h1>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead style={{ height: "28px" }}>
-              <tr>
-                <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}>Date</th>
-                <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}>Method</th>
-                <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "50%", paddingLeft: "5px" }}>Fund</th>
-                <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "20%", paddingRight: "5px" }}>Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tableDonations()}
-              <tr style={{ height: "28px" }}>
-                <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}></td>
-                <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}></td>
-                <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "50%", paddingRight: "5px", fontWeight: "bold" }}>Total Contributions:</td>
-                <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "20%", paddingRight: "5px", fontWeight: "bold" }}>{getTotalContributions()}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+          {legalBlock()}
 
+          <div>
+            <h1>Statement Summary:</h1>
+            <div style={{ display: "flex", flexWrap: "wrap", columnGap: "16px" }}>
+              <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                <h2>Total Contributions:</h2>
+                <div style={{ minHeight: "80px", padding: "12px 0", boxSizing: "border-box", width: "100%", textAlign: "center", border: "4px solid var(--print-accent)", fontSize: "clamp(24px, 8vw, 40px)", overflowWrap: "anywhere", display: "flex", alignItems: "center", justifyContent: "center" }}>{getTotalContributions()}</div>
+              </div>
+              <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                <h2>Funds:</h2>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead style={{ height: "24px" }}>
+                    <tr>
+                      <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "70%", paddingLeft: "5px" }}>Fund</th>
+                      <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "30%", paddingRight: "5px" }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableFundTotal()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h1>Contribution Details:</h1>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead style={{ height: "28px" }}>
+                <tr>
+                  <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}>Date</th>
+                  <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}>Method</th>
+                  <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "50%", paddingLeft: "5px" }}>Fund</th>
+                  <th style={{ borderBottom: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "20%", paddingRight: "5px" }}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableDonations()}
+                <tr style={{ height: "28px" }}>
+                  <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}></td>
+                  <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "left", width: "15%", paddingLeft: "5px" }}></td>
+                  <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "50%", paddingRight: "5px", fontWeight: "bold" }}>Total Contributions:</td>
+                  <td style={{ borderTop: "2px solid var(--print-accent)", borderCollapse: "collapse", textAlign: "right", width: "20%", paddingRight: "5px", fontWeight: "bold" }}>{getTotalContributions()}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: "40px", padding: "16px", backgroundColor: "#F8F9FA", borderRadius: "4px", fontSize: "12px", color: "#666", lineHeight: 1.6 }}>
+            <p data-testid="statement-note" style={{ margin: 0 }}><strong>{Locale.label("mobile.giving.statementNoteLabel")}</strong> {Locale.label("mobile.giving.statementNote").replace("{churchName}", churchName).replace("{year}", String(currYear))}</p>
+            <p data-testid="statement-disclaimer" style={{ fontSize: "10px", margin: "4px 0 0 0" }}>{Locale.label("mobile.giving.statementDisclaimer").split("{churchName}").join(churchName)}</p>
+            {churchSettings.givingNote && <p data-testid="statement-giving-note" style={{ whiteSpace: "pre-line", margin: "8px 0 0 0" }}>{churchSettings.givingNote}</p>}
+          </div>
+        </div>
       </div>
     </AuthGuard>
   );

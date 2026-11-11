@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { Locale } from "@churchapps/apphelper";
 import { ScreenSkeleton } from "./ScreenSkeleton";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
+import { HYMNS_ENABLED } from "@/features/hymns/enabled";
 import { PlaceholderPage } from "./PlaceholderPage";
 
 const loading = () => <ScreenSkeleton />;
@@ -17,6 +18,8 @@ const VolunteerDetail = dynamic(() => import("./details/VolunteerDetail").then(m
 const PlaylistDetail = dynamic(() => import("./details/PlaylistDetail").then(m => ({ default: m.PlaylistDetail })), { loading });
 const MessageComposePage = dynamic(() => import("./screens/MessageComposePage").then(m => ({ default: m.MessageComposePage })), { loading });
 const EventRegisterPage = dynamic(() => import("./screens/EventRegisterPage").then(m => ({ default: m.EventRegisterPage })), { loading });
+const PostDetail = dynamic(() => import("./details/PostDetail").then(m => ({ default: m.PostDetail })), { loading });
+const HymnDetail = dynamic(() => import("./details/HymnDetail").then(m => ({ default: m.HymnDetail })), { loading });
 
 interface Props {
   pageSlug: string;
@@ -29,9 +32,14 @@ export function DetailRouter({ pageSlug, id, config }: Props) {
     return <MessageComposePage config={config} />;
   }
   switch (pageSlug) {
+    case "hymns": return HYMNS_ENABLED
+      ? <HymnDetail id={id} churchId={config?.church?.id} />
+      : <PlaceholderPage title={Locale.label("mobile.notFound.title")} description={Locale.label("mobile.notFound.body")} actionLabel={Locale.label("mobile.notFound.backToHome")} actionHref="/mobile/dashboard" />;
     case "register": return <EventRegisterPage eventId={id} config={config} />;
     case "sermons":
     case "sermonDetails": return <SermonDetail id={id} config={config} />;
+    case "news":
+    case "newsDetails": return <PostDetail id={id} config={config} />;
     case "plans":
     case "plan":
     case "planDetails": return <PlanDetail id={id} config={config} />;

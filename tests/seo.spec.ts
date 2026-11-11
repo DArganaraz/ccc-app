@@ -1,4 +1,6 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test";
+
+const MAIN_API = process.env.API_BASE || "http://localhost:8084";
 
 // What a crawler sees: the server HTML, before any JavaScript runs.
 const metaContent = (html: string, name: string) => html.match(new RegExp(`<meta[^>]*name="${name}"[^>]*content="([^"]*)"`))?.[1];
@@ -70,5 +72,99 @@ test.describe("SEO", () => {
     for (const path of ["/sermons", "/groups", "/volunteer"]) expect(locs, path).toContain(new URL(path, baseURL).href);
     const sermon = entries.find((e) => e.loc.includes("/sermons/SER"));
     expect(sermon?.lastmod).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+  // Event pages are only linked from client-rendered calendar tiles, so the sitemap is how crawlers find them.
+  test("the sitemap lists the event pages on the church's calendars", async ({ request, baseURL }) => {
+    const xml = await (await request.get("/sitemap.xml")).text();
+    const events = [...xml.matchAll(/<loc>([^<]*\/events\/[^<]+)<\/loc>/g)].map((m) => m[1]);
+    for (const id of ["EVT00000001", "EVT00000016"]) expect(events, id).toContain(new URL("/events/" + id, baseURL).href);
+    expect(new Set(events).size).toBe(events.length);
+    for (const loc of events) expect((await request.get(new URL(loc).pathname)).status(), loc).toBe(200);
+  });
+
+  test("an event page describes itself as an Event", async ({ request }) => {
+    const response = await request.get("/events/EVT00000001");
+    expect(response.status()).toBe(200);
+    const blocks = [...(await response.text()).matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const event = blocks.find((b) => b["@type"] === "Event");
+    expect(event?.name).toBe("Sunday Morning Service");
+    expect(event?.startDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(event?.location?.name).toBe("Grace Community Church");
+  });
+
+  test("an unknown stream page is a real 404", async ({ request }) => {
+    const response = await request.get("/stream/missing-" + Date.now());
+    expect(response.status()).toBe(404);
+  });
+
+  test("an unknown volunteer plan is a real 404", async ({ request }) => {
+    const response = await request.get("/volunteer/missing-" + Date.now());
+    expect(response.status()).toBe(404);
+  });
+
+  // Registration, guest and sign-up pages are client components whose titles were h4–h6.
+  for (const [path, heading] of [["/register/EVT00000015", "Vacation Bible School"], ["/register/EVT00000001", "Registration is not available for this event."], ["/guest-register", "Guest registration is not enabled for this church."], ["/volunteer/PLA00000001", "Upcoming Worship Schedule"]]) {
+    test(`${path} has one h1 in the server HTML`, async ({ request }) => {
+      const html = await (await request.get(path)).text();
+      expect(h1Count(html)).toBe(1);
+      expect(h1Text(html)).toBe(heading);
+    });
+  }
+
+  test("the guest sign-up page is noindex while sign-up is off", async ({ request }) => {
+    expect(metaContent(await (await request.get("/guest-register")).text(), "robots")).toBe("noindex, follow");
+  });
+
+  test.describe("a blog post", () => {
+    const slug = "seo-blog-post-" + Date.now();
+    const publishDate = "2026-10-01T12:00:00.000Z";
+    let api: APIRequestContext;
+    let headers: Record<string, string>;
+    let postId: string;
+
+    test.beforeAll(async () => {
+      api = await playwrightRequest.newContext();
+      const login = await (await api.post(`${MAIN_API}/membership/users/login`, { data: { email: "demo@b1.church", password: "password" } })).json();
+      const church = login.userChurches.find((c: any) => c.church?.id === "CHU00000001");
+      headers = { Authorization: `Bearer ${church.apis.find((a: any) => a.keyName === "ContentApi").jwt}`, "Content-Type": "application/json" };
+      const posts = await (await api.post(`${MAIN_API}/content/posts`, { headers, data: [{ title: "Seo Blog Post", slug, excerpt: "Why posts need dates.", content: "# A heading in the body\n\nThe body of the post.\n\n```\n# comment\n```", publishDate }] })).json();
+      postId = posts[0].id;
+    });
+
+    test.afterAll(async () => {
+      if (postId) await api.delete(`${MAIN_API}/content/posts/${postId}`, { headers });
+      await api.dispose();
+    });
+
+    test("is in the sitemap with its publish date", async ({ request, baseURL }) => {
+      // no-cache: the route's API fetches are cached for an hour and this post is seconds old.
+      const xml = await (await request.get("/sitemap.xml", { headers: { "Cache-Control": "no-cache" } })).text();
+      const lastmod = (path: string) => xml.match(new RegExp(`<loc>${new URL(path, baseURL).href}</loc><lastmod>([^<]*)</lastmod>`))?.[1];
+      expect(lastmod("/blog/" + slug)).toBe("2026-10-01");
+      expect(lastmod("/blog")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    test("has one h1, even with a heading in the body", async ({ request }) => {
+      const html = await (await request.get("/blog/" + slug)).text();
+      expect(h1Count(html)).toBe(1);
+      expect(h1Text(html)).toBe("Seo Blog Post");
+    });
+
+    test("leaves a # line inside a code block alone", async ({ request }) => {
+      const html = await (await request.get("/blog/" + slug)).text();
+      expect(html).toContain("# comment");
+      expect(html).not.toContain("## comment");
+    });
+  });
+
+  // A church without a website home page sends "/" to the app, so the sitemap must not list it.
+  test("the sitemap leaves out a home page that redirects to the app", async ({ request, baseURL }) => {
+    const accra = new URL(baseURL!);
+    accra.hostname = accra.hostname.replace(/^grace\./, "accra.");
+    const home = await request.get(accra.origin + "/", { maxRedirects: 0 });
+    expect(home.status()).toBe(307);
+    const xml = await (await request.get(accra.origin + "/sitemap.xml")).text();
+    expect(xml).toContain("<urlset");
+    expect(xml).not.toContain(`<loc>${accra.origin}/</loc>`);
   });
 });

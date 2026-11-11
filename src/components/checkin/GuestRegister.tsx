@@ -1,29 +1,75 @@
 "use client";
-import React, { useState } from "react";
-import { Button, Icon, Box, Typography, TextField, IconButton } from "@mui/material";
+import React, { useEffect, useState } from "react";
+import { Button, Icon, Box, Typography, TextField, IconButton, MenuItem } from "@mui/material";
 import { ApiHelper } from "@churchapps/apphelper";
 import { Locale } from "@churchapps/apphelper";
-import { HeaderSection, HeaderIconContainer, CheckinCard, colors } from "./CheckinStyles";
+import { DEFAULT_TITLES, parseTitleOptions } from "@/helpers/TitleOptions";
+import { HeaderSection, HeaderIconContainer, HeaderImage, CheckinCard, colors } from "./CheckinStyles";
 
 interface GuestMember {
+  title?: string;
   firstName: string;
   lastName: string;
   email?: string;
   phone?: string;
+  householdRole?: string;
+  birthDate?: string;
+  gender?: string;
+  grade?: string;
 }
+
+interface GuestAddress {
+  address1: string;
+  address2: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+type FieldMode = "off" | "optional" | "required";
+type FieldKey = "title" | "email" | "phone" | "householdRole" | "address" | "birthDate" | "gender" | "maritalStatus" | "grade" | "comments";
+type FieldModes = Record<FieldKey, FieldMode>;
+
+// Matches the Api default, so the form looks like it always has until the church changes the checklist.
+const DEFAULT_MODES: FieldModes = { title: "off", email: "optional", phone: "optional", householdRole: "optional", address: "off", birthDate: "off", gender: "off", maritalStatus: "off", grade: "off", comments: "off" };
+const GENDERS = ["Unspecified", "Male", "Female"];
+// The first person heads the household; everyone after them picks one of these.
+const HOUSEHOLD_ROLES = ["Spouse", "Child", "Other"];
+const MARITAL_STATUSES = ["Unknown", "Single", "Married", "Divorced", "Widowed"];
+const GRADES = [
+  "PreK", "K", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "Graduated"
+];
+const emptyMember = (lastName = ""): GuestMember => ({ title: "", firstName: "", lastName, email: "", phone: "", householdRole: "", birthDate: "", gender: "", grade: "" });
 
 interface Props {
   churchId: string;
+  imageUrl?: string;
 }
 
-export function GuestRegister({ churchId }: Props) {
-  const [members, setMembers] = useState<GuestMember[]>([
-    { firstName: "", lastName: "", email: "", phone: "" },
-    { firstName: "", lastName: "", email: "", phone: "" }
-  ]);
+export function GuestRegister({ churchId, imageUrl }: Props) {
+  const [members, setMembers] = useState<GuestMember[]>([emptyMember(), emptyMember()]);
+  const [address, setAddress] = useState<GuestAddress>({ address1: "", address2: "", city: "", state: "", zip: "" });
+  const [maritalStatus, setMaritalStatus] = useState("");
+  const [comments, setComments] = useState("");
+  const [modes, setModes] = useState<FieldModes>(DEFAULT_MODES);
+  const [titles, setTitles] = useState<string[]>(DEFAULT_TITLES);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!churchId) return;
+    ApiHelper.getAnonymous("/people/guest-register/options?churchId=" + encodeURIComponent(churchId), "MembershipApi")
+      .then((data: Partial<FieldModes>) => { if (data && typeof data === "object") setModes({ ...DEFAULT_MODES, ...data }); })
+      .catch(() => { /* keep the default form */ });
+    // The church's own title list (Manage Church > Custom Fields in B1Admin).
+    ApiHelper.getAnonymous("/settings/public/" + encodeURIComponent(churchId), "MembershipApi")
+      .then((settings: any) => setTitles(parseTitleOptions(settings?.titleOptions)))
+      .catch(() => { /* keep the default titles */ });
+  }, [churchId]);
+
+  const on = (key: FieldKey) => modes[key] !== "off";
+  const required = (key: FieldKey) => modes[key] === "required";
 
   const updateMember = (index: number, field: keyof GuestMember, value: string) => {
     const updated = [...members];
@@ -34,7 +80,7 @@ export function GuestRegister({ churchId }: Props) {
   const addMember = () => {
     if (members.length >= 10) return;
     const lastName = members[0]?.lastName || "";
-    setMembers([...members, { firstName: "", lastName, email: "", phone: "" }]);
+    setMembers([...members, emptyMember(lastName)]);
   };
 
   const removeMember = (index: number) => {
@@ -50,17 +96,43 @@ export function GuestRegister({ churchId }: Props) {
         return;
       }
     }
+    const primary = members[0];
+    const missingRequired = (required("email") && !primary.email?.trim())
+      || (required("phone") && !primary.phone?.trim())
+      || (required("address") && (!address.address1.trim() || !address.city.trim() || !address.state.trim() || !address.zip.trim()))
+      || (required("maritalStatus") && !maritalStatus)
+      || (required("comments") && !comments.trim())
+      || members.some((m, i) => (required("title") && !m.title) || (i > 0 && required("householdRole") && !m.householdRole) || (required("birthDate") && !m.birthDate) || (required("gender") && !m.gender) || (required("grade") && !m.grade));
+    if (missingRequired) {
+      setError(Locale.label("checkin.guestRegister.validate.fieldsRequired"));
+      return;
+    }
 
     setIsSubmitting(true);
     try {
+      // Only the fields the church included are sent.
       const payload = {
         churchId,
-        members: members.map(m => ({
+        members: members.map((m, i) => ({
+          title: (on("title") && m.title) || undefined,
           firstName: m.firstName.trim(),
           lastName: m.lastName.trim(),
-          email: m.email?.trim() || undefined,
-          phone: m.phone?.trim() || undefined
-        }))
+          email: (i === 0 && on("email") && m.email?.trim()) || undefined,
+          phone: (on("phone") && m.phone?.trim()) || undefined,
+          householdRole: (i > 0 && on("householdRole") && m.householdRole) || undefined,
+          birthDate: (on("birthDate") && m.birthDate) || undefined,
+          gender: (on("gender") && m.gender) || undefined,
+          grade: (on("grade") && m.grade) || undefined
+        })),
+        address: on("address") ? {
+          address1: address.address1.trim(),
+          address2: address.address2.trim(),
+          city: address.city.trim(),
+          state: address.state.trim(),
+          zip: address.zip.trim()
+        } : undefined,
+        maritalStatus: (on("maritalStatus") && maritalStatus) || undefined,
+        comments: (on("comments") && comments.trim()) || undefined
       };
       await ApiHelper.postAnonymous("/people/guest-register", payload, "MembershipApi");
       setIsComplete(true);
@@ -75,10 +147,12 @@ export function GuestRegister({ churchId }: Props) {
     return (
       <>
         <HeaderSection>
-          <HeaderIconContainer>
-            <Icon sx={{ fontSize: 48, color: colors.success }}>check_circle</Icon>
-          </HeaderIconContainer>
-          <Typography variant="h4" sx={{ color: colors.textPrimary, fontWeight: 700, marginBottom: 1 }}>
+          {imageUrl
+            ? <HeaderImage src={imageUrl} alt="" data-testid="guest-register-header-photo" />
+            : <HeaderIconContainer>
+              <Icon sx={{ fontSize: 48, color: colors.success }}>check_circle</Icon>
+            </HeaderIconContainer>}
+          <Typography variant="h4" component="h1" sx={{ color: colors.textPrimary, fontWeight: 700, marginBottom: 1 }}>
             {Locale.label("checkin.guestRegister.complete.title")}
           </Typography>
           <Typography variant="body1" sx={{ color: colors.textSecondary }}>
@@ -92,10 +166,12 @@ export function GuestRegister({ churchId }: Props) {
   return (
     <>
       <HeaderSection>
-        <HeaderIconContainer>
-          <Icon sx={{ fontSize: 48, color: colors.primary }}>person_add</Icon>
-        </HeaderIconContainer>
-        <Typography variant="h4" sx={{ color: colors.textPrimary, fontWeight: 700, marginBottom: 1 }}>
+        {imageUrl
+          ? <HeaderImage src={imageUrl} alt="" data-testid="guest-register-header-photo" />
+          : <HeaderIconContainer>
+            <Icon sx={{ fontSize: 48, color: colors.primary }}>person_add</Icon>
+          </HeaderIconContainer>}
+        <Typography variant="h4" component="h1" sx={{ color: colors.textPrimary, fontWeight: 700, marginBottom: 1 }}>
           {Locale.label("checkin.guestRegister.title")}
         </Typography>
         <Typography variant="body1" sx={{ color: colors.textSecondary }}>
@@ -116,6 +192,20 @@ export function GuestRegister({ churchId }: Props) {
             )}
           </Box>
           <Box sx={{ display: "flex", gap: 2, marginBottom: 1 }}>
+            {on("title") && (
+              <TextField
+                select
+                label={Locale.label("checkin.guestRegister.personTitle")}
+                value={member.title}
+                onChange={(e) => updateMember(index, "title", e.target.value)}
+                size="small"
+                required={required("title")}
+                sx={{ minWidth: 110 }}
+              >
+                <MenuItem value="">&nbsp;</MenuItem>
+                {titles.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+              </TextField>
+            )}
             <TextField
               label={Locale.label("person.firstName")}
               value={member.firstName}
@@ -133,24 +223,112 @@ export function GuestRegister({ churchId }: Props) {
               fullWidth
             />
           </Box>
-          {index === 0 && (
-            <Box sx={{ display: "flex", gap: 2 }}>
+          {((index === 0 && on("email")) || on("phone") || (index > 0 && on("householdRole"))) && (
+            <Box sx={{ display: "flex", gap: 2, marginBottom: 1 }}>
+              {index > 0 && on("householdRole") && (
+                <TextField
+                  select
+                  label={Locale.label("checkin.guestRegister.householdRole")}
+                  value={member.householdRole}
+                  onChange={(e) => updateMember(index, "householdRole", e.target.value)}
+                  size="small"
+                  required={required("householdRole")}
+                  fullWidth
+                >
+                  {HOUSEHOLD_ROLES.map(r => <MenuItem key={r} value={r}>{Locale.label("checkin.guestRegister.householdRoles." + r)}</MenuItem>)}
+                </TextField>
+              )}
+              {index === 0 && on("email") && (
+                <TextField
+                  label={Locale.label("person.email")}
+                  type="email"
+                  value={member.email}
+                  onChange={(e) => updateMember(index, "email", e.target.value)}
+                  size="small"
+                  required={required("email")}
+                  fullWidth
+                />
+              )}
+              {on("phone") && (
+                <TextField
+                  label={Locale.label("checkin.guestRegister.phone")}
+                  type="tel"
+                  value={member.phone}
+                  onChange={(e) => updateMember(index, "phone", e.target.value)}
+                  size="small"
+                  required={index === 0 && required("phone")}
+                  fullWidth
+                />
+              )}
+            </Box>
+          )}
+          {(on("birthDate") || on("gender") || on("grade")) && (
+            <Box sx={{ display: "flex", gap: 2, marginBottom: 1 }}>
+              {on("birthDate") && (
+                <TextField
+                  label={Locale.label("checkin.guestRegister.birthDate")}
+                  type="date"
+                  value={member.birthDate}
+                  onChange={(e) => updateMember(index, "birthDate", e.target.value)}
+                  size="small"
+                  required={required("birthDate")}
+                  fullWidth
+                  slotProps={{ inputLabel: { shrink: true } }}
+                />
+              )}
+              {on("gender") && (
+                <TextField
+                  select
+                  label={Locale.label("checkin.guestRegister.gender")}
+                  value={member.gender}
+                  onChange={(e) => updateMember(index, "gender", e.target.value)}
+                  size="small"
+                  required={required("gender")}
+                  fullWidth
+                >
+                  {GENDERS.map(g => <MenuItem key={g} value={g}>{Locale.label("checkin.guestRegister.genders." + g)}</MenuItem>)}
+                </TextField>
+              )}
+              {on("grade") && (
+                <TextField
+                  select
+                  label={Locale.label("checkin.guestRegister.grade")}
+                  value={member.grade}
+                  onChange={(e) => updateMember(index, "grade", e.target.value)}
+                  size="small"
+                  required={required("grade")}
+                  fullWidth
+                >
+                  {GRADES.map(g => <MenuItem key={g} value={g}>{g}</MenuItem>)}
+                </TextField>
+              )}
+            </Box>
+          )}
+          {index === 0 && on("maritalStatus") && (
+            <Box sx={{ marginBottom: 1 }}>
               <TextField
-                label={Locale.label("person.email")}
-                type="email"
-                value={member.email}
-                onChange={(e) => updateMember(index, "email", e.target.value)}
+                select
+                label={Locale.label("checkin.guestRegister.maritalStatus")}
+                value={maritalStatus}
+                onChange={(e) => setMaritalStatus(e.target.value)}
                 size="small"
+                required={required("maritalStatus")}
                 fullWidth
-              />
-              <TextField
-                label={Locale.label("checkin.guestRegister.phone")}
-                type="tel"
-                value={member.phone}
-                onChange={(e) => updateMember(index, "phone", e.target.value)}
-                size="small"
-                fullWidth
-              />
+              >
+                {MARITAL_STATUSES.map(m => <MenuItem key={m} value={m}>{Locale.label("checkin.guestRegister.maritalStatuses." + m)}</MenuItem>)}
+              </TextField>
+            </Box>
+          )}
+          {index === 0 && on("address") && (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <Typography variant="subtitle2" sx={{ color: colors.textSecondary }}>{Locale.label("checkin.guestRegister.address")}</Typography>
+              <TextField label={Locale.label("checkin.guestRegister.address1")} value={address.address1} onChange={(e) => setAddress({ ...address, address1: e.target.value })} size="small" required={required("address")} fullWidth />
+              <TextField label={Locale.label("checkin.guestRegister.address2")} value={address.address2} onChange={(e) => setAddress({ ...address, address2: e.target.value })} size="small" fullWidth />
+              <Box sx={{ display: "flex", gap: 2 }}>
+                <TextField label={Locale.label("checkin.guestRegister.city")} value={address.city} onChange={(e) => setAddress({ ...address, city: e.target.value })} size="small" required={required("address")} fullWidth />
+                <TextField label={Locale.label("checkin.guestRegister.state")} value={address.state} onChange={(e) => setAddress({ ...address, state: e.target.value })} size="small" required={required("address")} sx={{ maxWidth: 110 }} />
+                <TextField label={Locale.label("checkin.guestRegister.zip")} value={address.zip} onChange={(e) => setAddress({ ...address, zip: e.target.value })} size="small" required={required("address")} sx={{ maxWidth: 130 }} />
+              </Box>
             </Box>
           )}
         </CheckinCard>
@@ -167,6 +345,22 @@ export function GuestRegister({ churchId }: Props) {
           {Locale.label("checkin.guestRegister.addFamilyMember")}
         </Button>
       </Box>
+
+      {on("comments") && (
+        <CheckinCard sx={{ padding: 2 }}>
+          <TextField
+            label={Locale.label("checkin.guestRegister.comments")}
+            value={comments}
+            onChange={(e) => setComments(e.target.value)}
+            size="small"
+            required={required("comments")}
+            multiline
+            minRows={3}
+            fullWidth
+            slotProps={{ htmlInput: { maxLength: 1000 } }}
+          />
+        </CheckinCard>
+      )}
 
       {error && (
         <Typography sx={{ color: "error.main", marginBottom: 2 }}>{error}</Typography>

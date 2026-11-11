@@ -149,6 +149,40 @@ test.describe.serial("Mobile groups upcoming events", () => {
   });
 });
 
+// ChurchAppsSupport#1451: the group's event card still offered Register to a member already registered.
+test.describe("Mobile group registered event", () => {
+  test("the event card says Registered instead of offering Register", async ({ page }) => {
+    const ctx = await request.newContext();
+    const login = await (await ctx.post(`${MAIN_API}/membership/users/login`, { data: { email: "demo@b1.church", password: "password" } })).json();
+    const uc = login.userChurches.find((c: any) => c.church?.id === CHURCH_ID);
+    const headers = { Authorization: `Bearer ${uc.jwt}` };
+    const title = "Group Registered Event " + Date.now();
+    // Sooner than any seeded event, so it is the group's next event.
+    const start = new Date(Date.now() + 20 * 60 * 1000);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    const created = await ctx.post(`${MAIN_API}/content/events`, {
+      headers,
+      data: [{ churchId: CHURCH_ID, groupId: "GRP00000030", title, description: "", start: start.toISOString(), end: end.toISOString(), allDay: false, visibility: "public", registrationEnabled: true, capacity: 100 }]
+    });
+    const eventId = (await created.json())[0]?.id;
+    try {
+      expect(eventId, "created event id").toBeTruthy();
+      const reg = await ctx.post(`${MAIN_API}/content/registrations/register`, { headers, data: { churchId: CHURCH_ID, eventId, personId: uc.person?.id } });
+      expect(reg.ok(), "registered the demo member").toBeTruthy();
+
+      await page.goto("/mobile/groups/GRP00000030?activeTab=events");
+      await expect(page.locator("main").getByText(title)).toBeVisible({ timeout: 20000 });
+      // The innermost block holding both the title and its register action is the event's card.
+      const card = page.locator("main div").filter({ has: page.getByText(title) }).filter({ has: page.getByRole("link", { name: /^Register(ed)?$/ }) }).last();
+      await expect(card.getByRole("link", { name: "Registered", exact: true })).toBeVisible();
+      await expect(card.getByRole("link", { name: "Register", exact: true })).toHaveCount(0);
+    } finally {
+      if (eventId) await ctx.delete(`${MAIN_API}/content/events/${eventId}`, { headers });
+      await ctx.dispose();
+    }
+  });
+});
+
 test.describe("Mobile group event registration (leader)", () => {
   test.describe.configure({ mode: "serial" });
   const GROUP_ID = "GRP00000023";
@@ -550,4 +584,41 @@ test.describe("Mobile group chat feed toggles", () => {
     await expect(dialog.getByTestId("group-chat-feed-label")).toHaveText(/Chat/i);
     await expect(dialog.getByPlaceholder(/Send a message/i)).toBeVisible();
   });
+});
+
+// In the group "Add Event" dialog, turning on Recurring (Frequency defaults to
+// Week) shows the S M T W T F S day buttons. Each button used to keep MUI's 64px
+// minimum width inside a 5/12-wide cell, so the row ran past the dialog's right
+// edge and the last Saturday button was cut off.
+test.describe("Weekly recurrence day buttons fit the new-event dialog", () => {
+  const GROUP_ID = "GRP00000023";
+
+  async function openRecurringEditor(page: Page) {
+    await page.goto(`/mobile/groups/${GROUP_ID}`);
+    await page.getByRole("button", { name: /^All events$/i }).click();
+    const addBtn = page.getByRole("button", { name: /^Add Event$/i });
+    await addBtn.waitFor({ state: "visible", timeout: 15000 });
+    await addBtn.click();
+
+    const dialog = page.getByRole("dialog").filter({ hasText: /New Event/i });
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.getByRole("switch", { name: /Recurring/i }).check();
+    return dialog;
+  }
+
+  for (const width of [1280, 390]) {
+    test(`Saturday button sits inside the dialog at ${width}px wide`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const dialog = await openRecurringEditor(page);
+
+      const saturday = dialog.getByTestId("weekday-s-button").last();
+      await expect(saturday).toBeVisible({ timeout: 5000 });
+      const content = dialog.locator(".MuiDialogContent-root");
+
+      const satBox = await saturday.boundingBox();
+      const contentBox = await content.boundingBox();
+      expect(satBox && contentBox).toBeTruthy();
+      expect(satBox!.x + satBox!.width).toBeLessThanOrEqual(contentBox!.x + contentBox!.width);
+    });
+  }
 });

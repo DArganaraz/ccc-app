@@ -16,7 +16,7 @@ interface PositionWithCount extends PositionInterface {
 }
 
 interface SignupPlanData {
-  plan: PlanInterface;
+  plan: PlanInterface & { signupDeadline?: string | null; showVolunteerNames?: boolean };
   positions: PositionWithCount[];
   times: TimeInterface[];
 }
@@ -35,6 +35,7 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [myAssignments, setMyAssignments] = useState<any[]>([]);
   const [assignmentsLoaded, setAssignmentsLoaded] = useState(false);
+  const [volunteerNames, setVolunteerNames] = useState<Record<string, string[]>>({});
 
   const isLoggedIn = !!context?.userChurch?.jwt;
   const personId = context?.person?.id;
@@ -52,6 +53,21 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
     }
   }, [isLoggedIn, assignmentsLoaded, positions]);
 
+  // Names of who's serving, when the plan shares them; the Api only gives them to signed-in members.
+  const loadVolunteerNames = React.useCallback(async () => {
+    if (!isLoggedIn || !plan.showVolunteerNames) return;
+    try {
+      const rows: { positionId: string; names: string[] }[] = await ApiHelper.get(`/plans/signup/${plan.id}/volunteers`, "DoingApi");
+      const map: Record<string, string[]> = {};
+      if (Array.isArray(rows)) rows.forEach((r) => { map[r.positionId] = r.names || []; });
+      setVolunteerNames(map);
+    } catch {
+      // names are optional
+    }
+  }, [isLoggedIn, plan.id, plan.showVolunteerNames]);
+
+  React.useEffect(() => { loadVolunteerNames(); }, [loadVolunteerNames]);
+
   const refreshData = async () => {
     const allPlans = await ApiHelper.getAnonymous("/plans/public/signup/" + churchId, "DoingApi");
     const updated = (allPlans || []).find((sp: any) => sp.plan.id === plan.id);
@@ -61,6 +77,7 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
       const data = await ApiHelper.get("/assignments/my", "DoingApi");
       const planPositionIds = positions.map(p => p.id);
       setMyAssignments(data.filter((a: any) => planPositionIds.includes(a.positionId)));
+      await loadVolunteerNames();
     }
   };
 
@@ -100,11 +117,10 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
 
   const getMyAssignment = (positionId: string) => myAssignments.find(a => a.positionId === positionId);
 
+  // The Api counts the deadline back from the first service time (#1325).
   const isDeadlinePassed = () => {
-    if (!plan.signupDeadlineHours || !plan.serviceDate) return false;
-    const deadline = new Date(plan.serviceDate);
-    deadline.setHours(deadline.getHours() - plan.signupDeadlineHours);
-    return new Date() > deadline;
+    if (!plan.signupDeadline) return false;
+    return new Date() > new Date(plan.signupDeadline);
   };
 
   const deadlinePassed = isDeadlinePassed();
@@ -119,9 +135,9 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
 
   return (
     <>
-      <Typography variant="h4" sx={{ fontWeight: 600, mb: 1 }}>{plan.name}</Typography>
+      <Typography variant="h4" component="h1" sx={{ fontWeight: 600, mb: 1 }}>{plan.name}</Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-        {DateHelper.prettyDate(new Date(plan.serviceDate || ""))}
+        {plan.serviceDate ? DateHelper.prettyDate(DateHelper.toDate(plan.serviceDate)) : ""}
         {times.length > 0 && (" \u00b7 " + times.map(t => t.displayName).join(", "))}
       </Typography>
       {plan.notes && <Typography variant="body2" sx={{ mb: 2 }}>{plan.notes}</Typography>}
@@ -145,6 +161,7 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
               const progress = (position.count || 0) > 0 ? (position.filledCount / (position.count || 0)) * 100 : 0;
               const myAssignment = getMyAssignment(position.id || "");
               const isSignedUp = !!myAssignment;
+              const names = volunteerNames[position.id || ""] || [];
 
               return (
                 <Card key={position.id} sx={{ borderRadius: 2, border: "1px solid", borderColor: isSignedUp ? "success.main" : "divider" }}>
@@ -157,6 +174,11 @@ export function VolunteerSignup({ planData: initialData, churchId }: Props) {
                         </Stack>
                         {position.description && (
                           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{position.description}</Typography>
+                        )}
+                        {names.length > 0 && (
+                          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }} data-testid={`volunteer-names-${position.id}`}>
+                            {Locale.label("serving.signedUpNames").replace("{}", names.join(", "))}
+                          </Typography>
                         )}
                       </Box>
                       <Box sx={{ textAlign: "right", ml: 2 }}>

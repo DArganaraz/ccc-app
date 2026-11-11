@@ -4,7 +4,7 @@ import React, { useContext } from "react";
 import { Box, Button, Skeleton, Typography } from "@mui/material";
 import { ApiHelper, Locale, UserHelper } from "@churchapps/apphelper";
 import { useQuery } from "@tanstack/react-query";
-import type { PersonInterface } from "@churchapps/helpers";
+import { Permissions, type PersonInterface } from "@churchapps/helpers";
 import UserContext from "@/context/UserContext";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
 import { mobileTheme } from "../mobileTheme";
@@ -20,8 +20,10 @@ interface PeopleSection {
   people: PersonInterface[];
 }
 
-const STATUS_RANK: Record<string, number> = { staff: 3, member: 2, "regular attendee": 1 };
-const REQUIRED_RANK: Record<string, number> = { Staff: 3, Members: 2, "Regular Attendees": 1, Everyone: 0 };
+// Mirrors the Api gate (PersonController.canViewDirectory): statuses not listed here (Guest, Inactive) never pass,
+// and the "Staff" tier (Admins Only) is out of every status's reach, so only People View gets in.
+const STATUS_RANK: Record<string, number> = { staff: 3, member: 2, "regular attendee": 1, visitor: 0 };
+const REQUIRED_RANK: Record<string, number> = { Staff: 4, Members: 2, "Regular Attendees": 1, Everyone: 0 };
 
 export const CommunityPage = ({ config }: Props) => {
   const tc = mobileTheme.colors;
@@ -37,7 +39,9 @@ export const CommunityPage = ({ config }: Props) => {
     enabled: loggedIn && !!churchId
   });
 
-  const canViewDirectory = loggedIn && (STATUS_RANK[membershipStatus] || 0) >= (REQUIRED_RANK[publicSettings?.directoryVisibility] ?? REQUIRED_RANK.Members);
+  // Staff with People View see everyone in B1Admin, so the Api lets them past the directory setting too.
+  const canViewPeople = loggedIn && UserHelper.checkAccess(Permissions.membershipApi.people.view);
+  const canViewDirectory = canViewPeople || (loggedIn && (STATUS_RANK[membershipStatus] ?? -1) >= (REQUIRED_RANK[publicSettings?.directoryVisibility] ?? REQUIRED_RANK.Members));
   const settingsSettled = !loggedIn || !churchId || settingsFetched;
 
   const { data: serverPeople = null, isFetching, isError: peopleError, refetch: refetchPeople } = useQuery<PersonInterface[]>({
@@ -74,17 +78,8 @@ export const CommunityPage = ({ config }: Props) => {
       const firstRaw = (p.name?.first || "").trim();
       const displayRaw = (p.name?.display || "").trim();
 
-      let letter = otherLabel;
-      if (firstRaw) {
-        letter = firstRaw.charAt(0).toUpperCase();
-      } else if (displayRaw) {
-
-        const parts = displayRaw.split(" ");
-        const fallback = parts.length > 1 ? parts[parts.length - 1] : parts[0];
-        if (fallback) letter = fallback.charAt(0).toUpperCase();
-      } else if (lastRaw) {
-        letter = lastRaw.charAt(0).toUpperCase();
-      }
+      const sortName = lastRaw || displayRaw.split(" ").pop() || firstRaw;
+      let letter = sortName ? sortName.charAt(0).toUpperCase() : otherLabel;
 
       if (!/^[A-Z]$/.test(letter)) letter = otherLabel;
 
@@ -155,7 +150,7 @@ export const CommunityPage = ({ config }: Props) => {
     <Box>
       <PageHead
         title={title}
-        lede={people && people.length > 0 ? Locale.label("mobile.community.peopleCount").replace("{}", String(people.length)) : undefined}
+        lede={people && people.length > 0 ? Locale.label(people.length === 1 ? "mobile.community.peopleCountOne" : "mobile.community.peopleCount").replace("{}", String(people.length)) : undefined}
       />
       <Plate>
         <Box sx={{ px: { xs: "16px", md: "24px" }, pt: { xs: "16px", md: "22px" }, pb: "4px" }}>

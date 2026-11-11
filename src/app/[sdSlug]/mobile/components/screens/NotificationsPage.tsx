@@ -14,7 +14,8 @@ import { WebPushHelper } from "@/helpers";
 import { mobileTheme } from "../mobileTheme";
 import { formatRelative, deriveNotificationUrl } from "../util";
 import { useNotificationDiagnostics } from "../../hooks/useNotificationDiagnostics";
-import { BackVerb, FilterPills, PageHead, Plate, PlateSection, QuietEmpty, Row, RowList, StatusBadge, TextLink, useSliceView } from "../kit";
+import { openExternal } from "../../helpers/dashboardLinks";
+import { BackVerb, FilterPills, PageHead, Plate, PlateSection, QuietEmpty, Row, RowList, SignInPrompt, StatusBadge, TextLink, useSliceView } from "../kit";
 import { ConversationAvatar, conversationHref, fetchConversations, type Conversation, type NotificationItem } from "../NotificationBellMenu";
 
 interface Props {
@@ -87,8 +88,8 @@ export const NotificationsPage = ({ config: _config }: Props) => {
   const handleClick = (n: NotificationItem) => {
     const href = deriveNotificationUrl(n);
     if (!href) return;
-    if (href.startsWith("http")) {
-      window.location.href = href;
+    if (/^https?:/.test(href)) {
+      openExternal(href);
     } else {
       router.push(href);
     }
@@ -154,6 +155,13 @@ export const NotificationsPage = ({ config: _config }: Props) => {
 
   const renderPushSection = () => {
     if (!loggedIn || diagnostics.permission === "unsupported") return null;
+    if (diagnostics.serverPushDisabled) {
+      return (
+        <PlateSection title={Locale.label("mobile.screens.pushNotifications")}>
+          <Typography sx={{ fontSize: 15, color: tc.text }}>{Locale.label("mobile.screens.pushDisabledOnServer")}</Typography>
+        </PlateSection>
+      );
+    }
     const on = diagnostics.hasSubscription && (!diagnostics.serverRegistrationEnabled || diagnostics.hasConfirmedServerEnrollment);
     const blocked = diagnostics.permission === "denied";
     const pendingRegistration = diagnostics.permission === "granted" && (!diagnostics.hasSubscription || (diagnostics.serverRegistrationEnabled && !diagnostics.hasConfirmedServerEnrollment));
@@ -269,6 +277,8 @@ export const NotificationsPage = ({ config: _config }: Props) => {
     unreadMessages > 0 ? Locale.label("mobile.inbox.unreadMessages").replace("{}", String(unreadMessages)) : "",
     unreadNotifications > 0 ? Locale.label("mobile.inbox.newNotifications").replace("{}", String(unreadNotifications)) : ""
   ].filter(Boolean).join(" · ");
+
+  if (!loggedIn) return <SignInPrompt title={Locale.label("mobile.inbox.signedOutTitle")} lede={Locale.label("mobile.inbox.signedOutBody")} />;
 
   return (
     <Box sx={{ pb: "24px" }}>

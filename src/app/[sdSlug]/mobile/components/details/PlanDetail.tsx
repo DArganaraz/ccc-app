@@ -158,11 +158,14 @@ export const PlanDetail = ({ id, config: _config }: Props) => {
           peopleRes = [];
         }
       }
+      const rank = new Map(peopleRes.map((p, i) => [p.id, i]));
+      const assignments = (Array.isArray(assignmentsRes) ? [...assignmentsRes] : [])
+        .sort((a: AssignmentInterface, b: AssignmentInterface) => (rank.get(a.personId) ?? Infinity) - (rank.get(b.personId) ?? Infinity));
       return {
         plan: planRes,
         planItems: Array.isArray(itemsRes) ? itemsRes : [],
         positions: Array.isArray(positionsRes) ? positionsRes : [],
-        assignments: Array.isArray(assignmentsRes) ? assignmentsRes : [],
+        assignments,
         times: Array.isArray(timesRes) ? timesRes : [],
         people: peopleRes
       };
@@ -340,6 +343,8 @@ export const PlanDetail = ({ id, config: _config }: Props) => {
   const members: { id?: string; positionId?: string; name: string; position: string; photo?: string }[] = [];
   teamGroups.forEach((g) => g.positions.forEach((position) => {
     ArrayHelper.getAll(assignments, "positionId", position.id).forEach((a: AssignmentInterface) => {
+      // Someone who declined isn't serving, so they don't belong on the team list or in its count.
+      if (a.status === "Declined") return;
       const person = ArrayHelper.getOne(people, "id", a.personId) as PersonInterface | null;
       if (!person) return;
       members.push({
@@ -483,7 +488,7 @@ export const PlanDetail = ({ id, config: _config }: Props) => {
                 <Typography sx={{ mt: "10px", fontSize: 13.5, color: tc.textSecondary }}>
                   {Locale.label("mobile.serving.servingCount").replace("{}", String(members.length))}
                   {" · "}
-                  {Locale.label("mobile.serving.teamsCount").replace("{}", String(teamGroups.length))}
+                  {teamGroups.length === 1 ? Locale.label("mobile.serving.teamCount") : Locale.label("mobile.serving.teamsCount").replace("{}", String(teamGroups.length))}
                 </Typography>
               </>
             )}
@@ -552,8 +557,6 @@ const AssignmentBlock = ({
 
   if (!position || !assignment) return null;
 
-  const meta = statusMeta(assignment.status);
-
   const sortedTimes = [...times].sort((a: any, b: any) => (a?.startTime > b?.startTime ? 1 : -1));
 
   let latestBoundary: Date | null = null;
@@ -568,6 +571,10 @@ const AssignmentBlock = ({
   const canRespond = assignment.status === "Unconfirmed" && beforeService;
   const canWithdraw = assignment.status === "Accepted" && beforeService;
   const canReaccept = assignment.status === "Declined" && beforeService;
+  const responseClosed = assignment.status === "Unconfirmed" && !beforeService;
+  const meta = responseClosed
+    ? { label: Locale.label("mobile.details.responseClosed"), tone: "neu" as const }
+    : statusMeta(assignment.status);
 
   const handleRespond = async (action: "accept" | "decline") => {
     if (!assignment.id || busy) return;
@@ -615,6 +622,12 @@ const AssignmentBlock = ({
           <Button variant="contained" size="small" onClick={() => handleRespond("accept")} disabled={busy}>{Locale.label("mobile.details.accept")}</Button>
           <Button variant="outlined" size="small" onClick={() => setConfirmDecline(true)} disabled={busy}>{Locale.label("mobile.details.decline")}</Button>
         </Box>
+      )}
+
+      {responseClosed && (
+        <Typography sx={{ fontSize: 14, color: tc.textSecondary, mt: "14px" }}>
+          {Locale.label("mobile.details.responseWindowPassed")}
+        </Typography>
       )}
 
       {canWithdraw && (

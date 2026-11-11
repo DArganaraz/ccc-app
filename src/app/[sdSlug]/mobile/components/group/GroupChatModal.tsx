@@ -4,7 +4,6 @@ import React from "react";
 import { Box, Button, CircularProgress, Dialog, IconButton, Menu, MenuItem, Snackbar, TextField, Typography } from "@mui/material";
 import AddReactionOutlinedIcon from "@mui/icons-material/AddReactionOutlined";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import AttachFileIcon from "@mui/icons-material/AttachFile";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
@@ -14,10 +13,13 @@ import { SubscriptionToggle, SUBSCRIPTION_MESSAGE_TYPE } from "@churchapps/apphe
 import type { PersonInterface } from "@churchapps/helpers";
 import { mobileTheme } from "../mobileTheme";
 import { Eyebrow, PersonAvatar, QuietEmpty, Sheet, TextLink } from "../kit";
+import { enterSends, formatMessageTime } from "../util";
+import { useFormattingShortcuts } from "../FormattingPopup";
+import { MarkdownMessage } from "../MarkdownMessage";
 
-export type ChatSubTab = "discussions" | "announcements";
+export type ChatSubTab = "discussions" | "announcements" | "notes";
 
-type ContentType = "group" | "groupAnnouncement";
+type ContentType = "group" | "groupAnnouncement" | "groupNote";
 
 interface MessageReaction {
   emoji: string;
@@ -70,13 +72,17 @@ export const GroupChatModal = ({
   const tc = mobileTheme.colors;
   const [requestedTab, setSubTab] = React.useState<ChatSubTab>(initialSubTab);
   // A disabled feed can never be the active one, whatever the caller or a stale deep link asked for.
+  // Leader notes are their own private feed (ChurchAppsSupport#1199): never mixed with the chat tabs.
   const subTab: ChatSubTab =
-    requestedTab === "discussions" && !discussionsEnabled ? "announcements"
-      : requestedTab === "announcements" && !announcementsEnabled ? "discussions"
-        : requestedTab;
+    requestedTab === "notes" ? (isLeader ? "notes" : "discussions")
+      : requestedTab === "discussions" && !discussionsEnabled ? "announcements"
+        : requestedTab === "announcements" && !announcementsEnabled ? "discussions"
+          : requestedTab;
   const [conversations, setConversations] = React.useState<Conversation[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [draft, setDraft] = React.useState("");
+  const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const { onKeyDown: onFormatKeyDown, popup: formattingPopup } = useFormattingShortcuts(composerRef, draft, setDraft);
   const [sending, setSending] = React.useState(false);
   const [people, setPeople] = React.useState<Record<string, PersonInterface>>({});
   const [hasAnnouncements, setHasAnnouncements] = React.useState(false);
@@ -111,8 +117,8 @@ export const GroupChatModal = ({
     })));
   }, []);
 
-  const currentContentType: ContentType = subTab === "announcements" ? "groupAnnouncement" : "group";
-  const canPost = subTab === "announcements" ? isLeader : true;
+  const currentContentType: ContentType = subTab === "notes" ? "groupNote" : subTab === "announcements" ? "groupAnnouncement" : "group";
+  const canPost = subTab === "discussions" || isLeader;
 
   React.useEffect(() => {
     if (open) setSubTab(initialSubTab);
@@ -283,7 +289,7 @@ export const GroupChatModal = ({
           contentId: groupId,
           title: Locale.label("mobile.group.groupChatTitle")
             .replace("{}", groupName || Locale.label("mobile.components.group"))
-            .replace("{}", currentContentType === "groupAnnouncement" ? Locale.label("mobile.group.announcements") : Locale.label("mobile.group.chat")),
+            .replace("{}", currentContentType === "groupNote" ? Locale.label("mobile.group.leaderNotes") : currentContentType === "groupAnnouncement" ? Locale.label("mobile.group.announcements") : Locale.label("mobile.group.chat")),
           visibility: "hidden"
         };
         const result: Conversation[] = await ApiHelper.post(
@@ -357,45 +363,18 @@ export const GroupChatModal = ({
     }
   };
 
-  const formatRelative = (t?: string | Date) => {
-    if (!t) return "";
-    const d = typeof t === "string" ? new Date(t) : t;
-    if (isNaN(d.getTime())) return "";
-    const diff = Math.floor((Date.now() - d.getTime()) / 60000);
-    if (diff < 1) return Locale.label("mobile.now");
-    if (diff < 60) return `${diff}m`;
-    if (diff < 1440) return `${Math.floor(diff / 60)}h`;
-    return `${Math.floor(diff / 1440)}d`;
-  };
-
+  // Image links show as images under the text; other URLs stay inline and autolink, as in private messages.
   const renderMessageContent = (content: string) => {
     const imageRegex = /https?:\/\/\S+\.(jpg|jpeg|png|gif|webp|svg)(\?\S*)?/gi;
-    const urlRegex = /https?:\/\/\S+/gi;
     const imageMatches = content.match(imageRegex);
-    const urlMatches = content.match(urlRegex);
-    const textWithoutUrls = content.replace(urlRegex, "").trim();
+    const textWithoutImages = content.replace(imageRegex, "").trim();
 
     return (
       <>
-        {textWithoutUrls && <Typography sx={{ fontSize: 15, lineHeight: "21px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{textWithoutUrls}</Typography>}
+        {textWithoutImages && <MarkdownMessage text={textWithoutImages} sx={{ fontSize: 15, lineHeight: "21px" }} />}
         {imageMatches?.map((url, i) => (
-          <Box key={i} component="img" src={url} alt="" sx={{ maxWidth: "100%", borderRadius: "8px", mt: 0.5, display: "block" }} />
+          <Box key={i} component="img" src={url} alt="" sx={{ maxWidth: "100%", borderRadius: "8px", mt: textWithoutImages || i > 0 ? 0.5 : 0, display: "block" }} />
         ))}
-        {urlMatches
-          ?.filter((url) => !new RegExp(imageRegex.source, "i").test(url))
-          .map((url, i) => (
-            <Box
-              key={i}
-              component="a"
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{ display: "inline-flex", alignItems: "center", gap: "6px", mt: 0.5, fontSize: 14, fontWeight: 600, color: "inherit", textDecoration: "underline" }}
-            >
-              <AttachFileIcon sx={{ fontSize: 18 }} />
-              {Locale.label("mobile.group.openFile")}
-            </Box>
-          ))}
       </>
     );
   };
@@ -419,7 +398,7 @@ export const GroupChatModal = ({
             <Box sx={{ maxWidth: "78%", minWidth: 0, display: "flex", flexDirection: "column", alignItems: isMine ? "flex-end" : "flex-start" }}>
               {showName && (
                 <Typography sx={{ fontSize: 13.5, lineHeight: "19px", color: tc.textSecondary, mb: "4px" }}>
-                  {[name, formatRelative(m.timeSent)].filter(Boolean).join(" · ")}
+                  {[name, formatMessageTime(m.timeSent)].filter(Boolean).join(" · ")}
                 </Typography>
               )}
               <Box sx={{
@@ -471,7 +450,7 @@ export const GroupChatModal = ({
                     <MoreVertIcon sx={{ fontSize: 18 }} />
                   </IconButton>
                 )}
-                {(isMine || !showName) && <Typography sx={{ fontSize: 12, color: tc.textSecondary }}>{formatRelative(m.timeSent)}</Typography>}
+                {(isMine || !showName) && <Typography data-testid="message-time" sx={{ fontSize: 12, color: tc.textSecondary }}>{formatMessageTime(m.timeSent)}</Typography>}
               </Box>
             </Box>
           </Box>
@@ -481,7 +460,7 @@ export const GroupChatModal = ({
   );
 
   const showAnnouncementsFeed = announcementsEnabled && (isLeader || hasAnnouncements);
-  const feedLabel = subTab === "announcements" ? Locale.label("mobile.group.announcements") : Locale.label("mobile.group.chat");
+  const feedLabel = subTab === "notes" ? Locale.label("mobile.group.leaderNotes") : subTab === "announcements" ? Locale.label("mobile.group.announcements") : Locale.label("mobile.group.chat");
   const column = { width: "100%", maxWidth: 760, mx: "auto", px: "16px", boxSizing: "border-box" } as const;
 
   const renderStrip = () => {
@@ -495,7 +474,7 @@ export const GroupChatModal = ({
           {latestAnnouncement ? (
             <>
               <Typography sx={{ fontSize: 15, lineHeight: "21px", fontWeight: 500, color: tc.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestAnnouncement.content}</Typography>
-              <Typography sx={{ fontSize: 13.5, lineHeight: "19px", color: tc.textSecondary }}>{[nameOf(latestAnnouncement.personId), formatRelative(latestAnnouncement.timeSent)].filter(Boolean).join(" · ")}</Typography>
+              <Typography sx={{ fontSize: 13.5, lineHeight: "19px", color: tc.textSecondary }}>{[nameOf(latestAnnouncement.personId), formatMessageTime(latestAnnouncement.timeSent)].filter(Boolean).join(" · ")}</Typography>
             </>
           ) : <QuietEmpty>{Locale.label("mobile.group.noAnnouncementsYet")}</QuietEmpty>}
         </Box>
@@ -549,12 +528,13 @@ export const GroupChatModal = ({
           {!loading && messages.length === 0 && (
             <Box sx={{ py: "32px", textAlign: "center" }}>
               <Typography sx={{ fontSize: 16, fontWeight: 600, color: tc.text }}>
-                {subTab === "announcements" ? Locale.label("mobile.group.noAnnouncementsYet") : Locale.label("mobile.group.startTheConversation")}
+                {subTab === "notes" ? Locale.label("mobile.group.noNotesYet") : subTab === "announcements" ? Locale.label("mobile.group.noAnnouncementsYet") : Locale.label("mobile.group.startTheConversation")}
               </Typography>
               <QuietEmpty>
-                {subTab === "announcements"
-                  ? isLeader ? Locale.label("mobile.group.postAnnouncementBelow") : Locale.label("mobile.group.leadersCanPost")
-                  : Locale.label("mobile.group.beFirstToShare")}
+                {subTab === "notes" ? Locale.label("mobile.group.notesPrivate")
+                  : subTab === "announcements"
+                    ? isLeader ? Locale.label("mobile.group.postAnnouncementBelow") : Locale.label("mobile.group.leadersCanPost")
+                    : Locale.label("mobile.group.beFirstToShare")}
               </QuietEmpty>
             </Box>
           )}
@@ -573,19 +553,22 @@ export const GroupChatModal = ({
             <TextField
               fullWidth
               size="small"
-              placeholder={subTab === "announcements" ? Locale.label("mobile.group.postAnnouncement") : Locale.label("mobile.group.sendAMessage")}
+              placeholder={subTab === "notes" ? Locale.label("mobile.group.addNote") : subTab === "announcements" ? Locale.label("mobile.group.postAnnouncement") : Locale.label("mobile.group.sendAMessage")}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              inputRef={composerRef}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                onFormatKeyDown(e);
+                if (e.key === "Enter" && !e.shiftKey && enterSends()) {
                   e.preventDefault();
                   handleSend();
                 }
               }}
               multiline
               maxRows={4}
-              slotProps={{ input: { sx: { borderRadius: "8px", minHeight: 44 } } }}
+              slotProps={{ input: { sx: { borderRadius: "8px", minHeight: 44 } }, htmlInput: { enterKeyHint: "enter" } }}
             />
+            {formattingPopup}
             <Button variant="contained" onClick={handleSend} disabled={sending || !draft.trim()} aria-label={Locale.label("mobile.details.send")} sx={{ minWidth: 44, width: 44, height: 44, px: 0, flex: "none" }}>
               <SendIcon sx={{ fontSize: 20 }} />
             </Button>

@@ -19,6 +19,7 @@ import { SermonsPage } from "./components/SermonsPage";
 import { DonatePage } from "./components/DonatePage";
 import { RestrictedPage } from "@/components/RestrictedPage";
 import { resolveRedirect } from "@/helpers/RedirectHelper";
+import { pageTreePath } from "@/helpers/pageTreePath";
 
 const VIRTUAL_PAGE_SLUGS = ["votd", "bible", "donate", "stream", "sermons"];
 
@@ -50,7 +51,9 @@ export async function generateMetadata({ params }: {params:PageParams}): Promise
 
 const loadData = async (sdSlug:string, pageSlug:string) => {
   const config: ConfigurationInterface = await ConfigHelper.load(sdSlug, "website");
-  const pageData = await fetchCachedOrNull<PageInterface>("/pages/" + config.church.id + "/tree?url=" + pageSlug + (config.siteId ? "&siteId=" + config.siteId : ""), "ContentApi", sdSlug);
+  const treePath = pageTreePath(config.church?.id, pageSlug, config.siteId);
+  if (!treePath) notFound();
+  const pageData = await fetchCachedOrNull<PageInterface>(treePath, "ContentApi", sdSlug);
   return { pageData: pageData || ({} as PageInterface), config };
 };
 
@@ -60,13 +63,15 @@ export default async function Home({ params }: { params: PageParams }) {
   const { pageData, config } = await loadSharedData(sdSlug, pageSlug);
 
   // A redirect the church saved wins over the built-in virtual pages, but not over a CMS page.
-  if (!pageData?.url) {
+  // A page the visitor can't see comes back as { restricted } with no url; it is still a CMS page.
+  const restricted = !!(pageData as any)?.restricted;
+  if (!pageData?.url && !restricted) {
     const to = await resolveRedirect(config.church.id || "", sdSlug, "/" + pageSlug);
     if (to) permanentRedirect(to);
     if (!VIRTUAL_PAGE_SLUGS.includes(pageSlug)) return notFound();
   }
 
-  if ((pageData as any)?.restricted) {
+  if (restricted) {
     return (
       <>
         <Theme config={config} />

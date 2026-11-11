@@ -194,6 +194,225 @@ test.describe("Mobile dashboard sign-in prompt", () => {
   });
 });
 
+// Issue #1313: a church picks how photo links appear on Home (B1Admin > B1 Mobile > Home screen tiles).
+// The demo church has no photo links, so the visitor's links request is answered with three.
+async function setTileLayout(layout: string) {
+  const ctx = await request.newContext();
+  const login = await ctx.post(API_BASE + "/membership/users/login", { data: { email: "demo@b1.church", password: "password" } });
+  if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
+  const body = await login.json();
+  const uc = (body.userChurches || []).find((c: any) => c.church?.id === DEMO_CHURCH.ID);
+  const headers = { Authorization: `Bearer ${uc?.jwt}` };
+  const all = await (await ctx.get(API_BASE + "/membership/settings", { headers })).json();
+  const row = { ...((all as any[]).find(s => s.keyName === "mobileTileLayout") || { churchId: DEMO_CHURCH.ID, keyName: "mobileTileLayout" }), public: 1, value: layout };
+  const res = await ctx.post(API_BASE + "/membership/settings", { headers, data: [row] });
+  if (!res.ok()) throw new Error(`settings save failed: ${res.status()}`);
+  await ctx.post(BASE_URL + "/api/revalidate/" + DEMO_CHURCH.SUBDOMAIN);
+  await ctx.dispose();
+}
+
+const PHOTO_LINKS = [
+  { id: "TILE1", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "sermons", text: "Watch Sermons", sort: 1, photo: "/images/group.jpg", visibility: "everyone" },
+  { id: "TILE2", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "bible", text: "Read the Bible", sort: 2, photo: "/images/group.jpg", visibility: "everyone" },
+  { id: "TILE3", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "stream", text: "Join Live", sort: 3, photo: "/images/group.jpg", visibility: "everyone" }
+];
+
+test.describe("Mobile dashboard tile layout", () => {
+  test.describe.configure({ mode: "serial" });
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 390, height: 844 } });
+  test.afterAll(async () => { await setTileLayout("grid"); });
+
+  const openDashboard = async (page: Page) => {
+    await page.route(/\/links\/church\/[^/]+\?category=b1Tab/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PHOTO_LINKS) }));
+    await page.goto("/mobile/dashboard");
+    await expect(page.locator("main").getByText("Watch Sermons", { exact: true }).first()).toBeVisible({ timeout: 30000 });
+  };
+
+  test("keeps the photo grid by default", async ({ page }) => {
+    await setTileLayout("grid");
+    await openDashboard(page);
+    const main = page.locator("main");
+    for (const l of PHOTO_LINKS) await expect(main.getByRole("link", { name: l.text, exact: true }).first()).toBeVisible();
+    await expect(main.locator(".kit-row", { hasText: "Read the Bible" })).toHaveCount(0);
+  });
+
+  test("shows photo links as a list when the church picks List", async ({ page }) => {
+    await setTileLayout("list");
+    await openDashboard(page);
+    const main = page.locator("main");
+    await expect(page.getByTestId("home-tile-grid")).toHaveCount(0);
+    for (const l of PHOTO_LINKS) await expect(main.locator(".kit-row", { hasText: l.text })).toBeVisible();
+    await expect(main.locator(".kit-row", { hasText: "Read the Bible" })).toHaveAttribute("href", /\/mobile\/bible/);
+    await expect(main.locator(".kit-row", { hasText: "Read the Bible" }).locator("img")).toHaveCount(1);
+  });
+
+  test("shows photo links in one sideways-scrolling row when the church picks Scrolling row", async ({ page }) => {
+    await setTileLayout("scroll");
+    await openDashboard(page);
+    const row = page.getByTestId("home-tile-scroll");
+    await expect(row).toBeVisible();
+    await expect(row.getByRole("link")).toHaveCount(3);
+    const boxes = await Promise.all((await row.getByRole("link").all()).map(l => l.boundingBox()));
+    expect(new Set(boxes.map(b => Math.round(b!.y))).size).toBe(1);
+  });
+
+  // ChurchAppsSupport#1454: the row keeps moving forward and wraps to the first tile instead of sliding back,
+  // with one dot per tile under it and the current one marked.
+  test("moves the tile row on its own and wraps forward to the first tile when the church picks Scrolling (automatic)", async ({ page }) => {
+    test.setTimeout(90000);
+    await setTileLayout("autoscroll");
+    await openDashboard(page);
+    const row = page.getByTestId("home-tile-scroll");
+    await expect(row.getByRole("link")).toHaveCount(3);
+    const dots = page.getByTestId("home-tile-scroll-dots").getByRole("button");
+    await expect(dots).toHaveCount(3);
+    await expect(dots.first()).toHaveAttribute("aria-current", "true");
+    // Every time the row moves left it should land straight on the start, never pass back over the tiles.
+    await row.evaluate((el) => {
+      const w = window as unknown as { stepsBack: number[] };
+      w.stepsBack = [];
+      let last = el.scrollLeft;
+      el.addEventListener("scroll", () => { if (el.scrollLeft < last - 1) w.stepsBack.push(el.scrollLeft); last = el.scrollLeft; });
+    });
+    await page.mouse.move(0, 0);
+    await expect(dots.nth(1)).toHaveAttribute("aria-current", "true", { timeout: 15000 });
+    await expect(dots.nth(2)).toHaveAttribute("aria-current", "true", { timeout: 15000 });
+    // Past the last tile it wraps to the first instead of stopping.
+    await expect(dots.first()).toHaveAttribute("aria-current", "true", { timeout: 15000 });
+    await expect.poll(() => row.evaluate((el) => el.scrollLeft), { timeout: 5000 }).toBeLessThan(2);
+    const stepsBack = await page.evaluate(() => (window as unknown as { stepsBack: number[] }).stepsBack);
+    expect(stepsBack.length).toBeGreaterThan(0);
+    expect(stepsBack.every((left) => left < 2)).toBe(true);
+  });
+
+  test("keeps the tile row still under reduced motion", async ({ page }) => {
+    await setTileLayout("autoscroll");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await openDashboard(page);
+    const row = page.getByTestId("home-tile-scroll");
+    await expect(row.getByRole("link")).toHaveCount(3);
+    await expect(row).toHaveAttribute("data-autoscroll", "off");
+  });
+
+  // ChurchAppsSupport#1494: the two combined layouts feature the first three photo links and list the rest
+  // beneath, with an All link to the More screen.
+  const FIVE_LINKS = [
+    ...PHOTO_LINKS,
+    { id: "TILE4", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "groups", text: "Find a Group", sort: 4, photo: "/images/group.jpg", visibility: "everyone" },
+    { id: "TILE5", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "donation", text: "Give Online", sort: 5, photo: "/images/group.jpg", visibility: "everyone" }
+  ];
+  const openWithLinks = async (page: Page, links: object[]) => {
+    await page.route(/\/links\/church\/[^/]+\?category=b1Tab/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(links) }));
+    await page.goto("/mobile/dashboard");
+    await expect(page.locator("main").getByText("Watch Sermons", { exact: true }).first()).toBeVisible({ timeout: 30000 });
+  };
+  const tileSection = (page: Page) => page.getByTestId("home-tiles-section");
+
+  test("features three photo links as a grid and lists the rest when the church picks Grid and list", async ({ page }) => {
+    await setTileLayout("gridlist");
+    await openWithLinks(page, FIVE_LINKS);
+    const grid = page.getByTestId("home-tile-grid");
+    await expect(grid.getByRole("link")).toHaveCount(3);
+    for (const name of ["Watch Sermons", "Read the Bible", "Join Live"]) await expect(grid.getByRole("link", { name, exact: true })).toBeVisible();
+    const list = page.getByTestId("home-tile-list");
+    await expect(list.locator(".kit-row")).toHaveCount(2);
+    await expect(list.locator(".kit-row", { hasText: "Find a Group" })).toBeVisible();
+    await expect(list.locator(".kit-row", { hasText: "Give Online" })).toBeVisible();
+    const all = tileSection(page).getByRole("link", { name: "All", exact: true });
+    await expect(all).toHaveAttribute("href", /\/mobile\/more/);
+    await all.click();
+    await expect(page).toHaveURL(/\/mobile\/more/, { timeout: 15000 });
+  });
+
+  test("features three photo links in the moving row and lists the rest when the church picks Scrolling (automatic) and list", async ({ page }) => {
+    await setTileLayout("autoscrolllist");
+    await openWithLinks(page, FIVE_LINKS);
+    await expect(page.getByTestId("home-tile-scroll").getByRole("link")).toHaveCount(3);
+    await expect(page.getByTestId("home-tile-scroll-dots").getByRole("button")).toHaveCount(3);
+    await expect(page.getByTestId("home-tile-list").locator(".kit-row")).toHaveCount(2);
+    await expect(tileSection(page).getByRole("link", { name: "All", exact: true })).toHaveAttribute("href", /\/mobile\/more/);
+  });
+
+  test("shows only the featured tiles, with no list or All link, when there are three or fewer", async ({ page }) => {
+    await setTileLayout("gridlist");
+    await openWithLinks(page, PHOTO_LINKS);
+    await expect(page.getByTestId("home-tile-grid").getByRole("link")).toHaveCount(3);
+    await expect(page.getByTestId("home-tile-list")).toHaveCount(0);
+    await expect(tileSection(page).getByRole("link", { name: "All", exact: true })).toHaveCount(0);
+  });
+
+  // Issue #1315: a verse-of-the-day link with a photo is a tile like the rest, not only the verse section.
+  test("shows a photo verse-of-the-day link as a tile", async ({ page }) => {
+    await setTileLayout("grid");
+    const links = [...PHOTO_LINKS, { id: "TILE4", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "votd", text: "Daily verse", sort: 4, photo: "/images/group.jpg", visibility: "everyone" }];
+    await page.route(/\/links\/church\/[^/]+\?category=b1Tab/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(links) }));
+    await page.goto("/mobile/dashboard");
+    await expect(page.getByTestId("home-tile-grid").getByRole("link", { name: "Daily verse" })).toHaveAttribute("href", /\/mobile\/votd/, { timeout: 30000 });
+  });
+});
+
 async function applySafeTop(page: Page) {
   await page.addStyleTag({ content: `:root, .mobileAppRoot { --safe-top: ${SAFE_TOP}px !important; --safe-bottom: 34px !important; }` });
 }
+
+// ChurchAppsSupport#1459: a Folder tab holds other tabs. Its tabs leave the tab bar, Home and More
+// and show only on the folder's own screen, as photo tiles when they all have a photo.
+const FOLDER_LINKS = [
+  { id: "FOLD1", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "folder", text: "Portal", icon: "folder", sort: 1, visibility: "everyone" },
+  { id: "FOLDC1", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "sermons", text: "Folder Sermons", parentId: "FOLD1", sort: 1, visibility: "everyone" },
+  { id: "FOLDC2", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "bible", text: "Folder Bible", parentId: "FOLD1", sort: 2, visibility: "everyone" },
+  { id: "FOLDC3", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "stream", text: "Folder Staff Stream", parentId: "FOLD1", sort: 3, visibility: "staff" },
+  { id: "FOLD2", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "folder", text: "Empty Folder", sort: 2, visibility: "everyone" },
+  { id: "TOP1", churchId: DEMO_CHURCH.ID, category: "b1Tab", linkType: "votd", text: "Top Verse", sort: 3, visibility: "everyone" }
+];
+
+test.describe("Mobile tab folders", () => {
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 390, height: 844 } });
+
+  const mockLinks = async (page: Page, links: object[]) => {
+    await page.route(/\/links\/church\/[^/]+\?category=b1Tab/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(links) }));
+  };
+
+  test("More lists the folder but not the tabs inside it, and the folder opens to its tabs", async ({ page }) => {
+    await mockLinks(page, FOLDER_LINKS);
+    await page.goto("/mobile/more");
+    const main = page.locator("main");
+    await expect(main.getByRole("link", { name: "Top Verse" })).toBeVisible({ timeout: 30000 });
+    await expect(main.getByRole("link", { name: "Portal" })).toBeVisible();
+    await expect(main.getByText("Folder Sermons")).toHaveCount(0);
+    // A folder with nothing visible inside is left out.
+    await expect(main.getByText("Empty Folder")).toHaveCount(0);
+
+    await main.getByRole("link", { name: "Portal" }).click();
+    await expect(page).toHaveURL(/\/mobile\/folder\?id=FOLD1/, { timeout: 15000 });
+    await expect(main.getByRole("heading", { level: 1, name: "Portal" })).toBeVisible();
+    await expect(main.getByRole("link", { name: "Folder Sermons" })).toHaveAttribute("href", /\/mobile\/sermons/);
+    await expect(main.getByRole("link", { name: "Folder Bible" })).toHaveAttribute("href", /\/mobile\/bible/);
+    // Visibility still applies inside a folder.
+    await expect(main.getByText("Folder Staff Stream")).toHaveCount(0);
+  });
+
+  test("the tab bar shows the folder in place of its tabs", async ({ page }) => {
+    await mockLinks(page, FOLDER_LINKS);
+    await page.goto("/mobile/dashboard");
+    const tabBar = page.getByRole("navigation").filter({ hasText: "Portal" }).first();
+    await expect(tabBar).toBeVisible({ timeout: 30000 });
+    await expect(tabBar).not.toContainText("Folder Sermons");
+    await expect(tabBar).not.toContainText("Folder Bible");
+  });
+
+  test("a folder whose tabs all have photos shows them as tiles", async ({ page }) => {
+    const photo = "/images/group.jpg";
+    await mockLinks(page, FOLDER_LINKS.map((l) => (l.parentId ? { ...l, photo } : l)));
+    await page.goto("/mobile/folder?id=FOLD1&title=Portal");
+    const grid = page.getByTestId("folder-tile-grid");
+    await expect(grid.getByRole("link", { name: "Folder Sermons" })).toBeVisible({ timeout: 30000 });
+    await expect(grid.getByRole("link", { name: "Folder Bible" })).toBeVisible();
+  });
+
+  test("an unknown folder shows an empty state", async ({ page }) => {
+    await mockLinks(page, FOLDER_LINKS);
+    await page.goto("/mobile/folder?id=NOPE&title=Gone");
+    await expect(page.locator("main").getByText("Nothing here yet")).toBeVisible({ timeout: 30000 });
+  });
+});

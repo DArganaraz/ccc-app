@@ -26,7 +26,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 30;
 
-type Mode = "login" | "register" | "forgot" | "verify" | "setPassword";
+type Mode = "login" | "register" | "forgot" | "verify" | "setPassword" | "mfa";
 
 interface CheckEmailResponseInterface {
   exists: boolean;
@@ -90,7 +90,6 @@ export const MobileLoginScreen = ({ config }: Props) => {
   const [regLastName, setRegLastName] = useState("");
   const [matchedChurchName, setMatchedChurchName] = useState("");
   const [matchedChurchId, setMatchedChurchId] = useState<string | undefined>(undefined);
-  const honeypotRef = useRef<HTMLInputElement>(null);
   const registerShownAtRef = useRef(0);
   useEffect(() => { if (mode === "register") registerShownAtRef.current = Date.now(); }, [mode]);
 
@@ -102,6 +101,8 @@ export const MobileLoginScreen = ({ config }: Props) => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [setPasswordFirstName, setSetPasswordFirstName] = useState("");
+  const [mfaToken, setMfaToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
 
   const [snack, setSnack] = useState<{ open: boolean; msg: string; severity: "success" | "error" | "info" }>({
     open: false,
@@ -186,10 +187,16 @@ export const MobileLoginScreen = ({ config }: Props) => {
     return true;
   };
 
-  const loginApiCall = async (payload: { email: string; password: string } | { jwt: string } | { authGuid: string }) => {
+  const loginApiCall = async (payload: { email: string; password: string } | { jwt: string } | { authGuid: string } | { mfaToken: string; mfaCode: string }) => {
     setLoading(true);
     try {
       const data: LoginResponseInterface = await ApiHelper.postAnonymous("/users/login", payload, "MembershipApi");
+      if (data?.mfaRequired) {
+        setMfaToken(data.mfaToken || "");
+        setMfaCode("");
+        setMode("mfa");
+        return true;
+      }
       if (data?.user != null) {
         await hydrateFromLoginResponse(data);
         const safeUrl = isSameOriginPath(returnUrl) ? returnUrl : "/mobile/dashboard";
@@ -198,7 +205,8 @@ export const MobileLoginScreen = ({ config }: Props) => {
       }
       if ("password" in payload) await handleLoginFailure();
       return false;
-    } catch {
+    } catch (e: any) {
+      if ("mfaToken" in payload) showError(e?.message === "Too many requests" ? e.message : Locale.label("mobile.login.errMfaCode"));
       if ("password" in payload) await handleLoginFailure();
       return false;
     } finally {
@@ -219,7 +227,7 @@ export const MobileLoginScreen = ({ config }: Props) => {
     if (!regLastName.trim()) { showError(Locale.label("mobile.login.errLastName")); return; }
     setLoading(true);
     try {
-      const body: any = { email, firstName: regFirstName, lastName: regLastName, appName: "B1", appUrl: typeof window !== "undefined" ? window.location.origin : undefined, website: honeypotRef.current?.value || "", fillMs: Date.now() - registerShownAtRef.current };
+      const body: any = { email, firstName: regFirstName, lastName: regLastName, appName: "B1", appUrl: typeof window !== "undefined" ? window.location.origin : undefined, fillMs: Date.now() - registerShownAtRef.current };
       if (matchedChurchId) body.churchId = matchedChurchId;
       const resp: any = await ApiHelper.postAnonymous("/users/register", body, "MembershipApi");
       if (resp?.errors?.length) {
@@ -395,6 +403,7 @@ export const MobileLoginScreen = ({ config }: Props) => {
     if (mode === "register") return churchName ? Locale.label("mobile.login.titleJoin").replace("{}", churchName) : Locale.label("mobile.login.titleCreateAccount");
     if (mode === "forgot") return Locale.label("mobile.login.titleResetPassword");
     if (mode === "verify") return Locale.label("mobile.login.titleVerify");
+    if (mode === "mfa") return Locale.label("mobile.login.titleMfa");
     if (mode === "setPassword") return setPasswordFirstName ? Locale.label("mobile.login.titleWelcome").replace("{}", setPasswordFirstName) : Locale.label("mobile.login.titleSetPassword");
     return churchName ? Locale.label("mobile.login.signInTo").replace("{}", churchName) : Locale.label("mobile.screenTitles.signIn");
   };
@@ -404,6 +413,7 @@ export const MobileLoginScreen = ({ config }: Props) => {
     if (mode === "forgot") return Locale.label("mobile.login.ledeForgot");
     if (mode === "verify") return Locale.label("mobile.login.ledeVerify").replace("{}", email);
     if (mode === "setPassword") return Locale.label("mobile.login.ledeSetPassword");
+    if (mode === "mfa") return Locale.label("mobile.login.ledeMfa");
     return Locale.label("mobile.login.lede");
   };
 
@@ -475,7 +485,6 @@ export const MobileLoginScreen = ({ config }: Props) => {
         <TextField label={Locale.label("mobile.screens.lastNameRegister")} value={regLastName} onChange={e => setRegLastName(e.target.value)} fullWidth disabled={loading} inputProps={{ autoComplete: "family-name" }} />
       </Box>
       {emailField(e => prefillRegisterFromMatch(e.target.value))}
-      <input ref={honeypotRef} type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" style={{ position: "absolute", left: "-10000px", width: "1px", height: "1px", overflow: "hidden" }} />
       <Button type="submit" variant="contained" fullWidth disabled={loading} size="large">
         {loading ? spinner : Locale.label("mobile.login.createAccountSubmit")}
       </Button>
@@ -570,6 +579,24 @@ export const MobileLoginScreen = ({ config }: Props) => {
     </Box>
   );
 
+  const renderMfa = () => (
+    <Box component="form" onSubmit={e => { e.preventDefault(); if (mfaCode.trim()) loginApiCall({ mfaToken, mfaCode: mfaCode.trim() }); }} sx={formSx}>
+      <TextField
+        label={Locale.label("mobile.login.mfaCode")}
+        value={mfaCode}
+        onChange={e => setMfaCode(e.target.value)}
+        inputProps={{ autoComplete: "one-time-code", maxLength: 12, "data-testid": "mfa-code" }}
+        autoFocus
+        fullWidth
+        disabled={loading}
+      />
+      <Button type="submit" variant="contained" fullWidth disabled={loading || !mfaCode.trim()} size="large">
+        {loading ? spinner : Locale.label("mobile.login.verifyCode")}
+      </Button>
+      <TextLink onClick={() => { setMfaToken(""); setMode("login"); }} sx={{ alignSelf: "center" }}>{Locale.label("mobile.login.backToSignIn")}</TextLink>
+    </Box>
+  );
+
   return (
     <Box sx={{ maxWidth: { md: 480 }, mx: "auto" }}>
       <Box sx={{ px: { xs: "16px", md: 0 }, pt: "20px", pb: "16px" }}>
@@ -583,6 +610,7 @@ export const MobileLoginScreen = ({ config }: Props) => {
           {mode === "forgot" && renderForgot()}
           {mode === "verify" && renderVerify()}
           {mode === "setPassword" && renderSetPassword()}
+          {mode === "mfa" && renderMfa()}
         </PlateSection>
         {mode === "login" && (
           <PlateSection>

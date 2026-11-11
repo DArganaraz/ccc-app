@@ -24,6 +24,9 @@ export function EventRegister({ churchId, eventId, event }: Props) {
   const context = useContext(UserContext);
   const isLoggedIn = !!context?.person;
   const [activeCount, setActiveCount] = useState(0);
+  // The server renders in its own time zone; show the event time once the page is running in the visitor's.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
 
   const reg = useEventRegistration({
     churchId,
@@ -57,15 +60,16 @@ export function EventRegister({ churchId, eventId, event }: Props) {
   }
 
   const getDisplayTime = () => {
-    if (!event.start) return "";
+    if (!event.start || !hydrated) return "";
     if (event.allDay) {
       const start = DateHelper.prettyDate(event.start);
       const end = DateHelper.prettyDate(event.end as Date);
       return start === end ? start : `${start} - ${end}`;
     }
     const start = DateHelper.prettyDateTime(event.start);
-    const endTime = DateHelper.prettyTime(event.end as Date);
-    return `${start} - ${endTime}`;
+    if (!event.end) return start;
+    const sameDay = DateHelper.prettyDate(event.start) === DateHelper.prettyDate(event.end as Date);
+    return `${start} - ${sameDay ? DateHelper.prettyTime(event.end as Date) : DateHelper.prettyDateTime(event.end as Date)}`;
   };
 
   const typeLabel = (t: RegType) => {
@@ -81,10 +85,10 @@ export function EventRegister({ churchId, eventId, event }: Props) {
       <Card sx={{ borderRadius: 2 }}>
         <CardContent sx={{ textAlign: "center", py: 4 }}>
           <Icon sx={{ fontSize: 48, color: "grey.400", mb: 1 }}>event_busy</Icon>
-          <Typography variant="h6">{Locale.label("registration.notOpen")}</Typography>
+          <Typography variant="h6" component="h1">{Locale.label("registration.notOpen")}</Typography>
           <Typography variant="body2" color="text.secondary">
             {event.registrationOpenDate && new Date(event.registrationOpenDate) > new Date()
-              ? Locale.label("registration.opensOn").replace("{}", DateHelper.prettyDate(event.registrationOpenDate))
+              ? Locale.label("registration.opensOn").replace("{}", hydrated ? DateHelper.prettyDate(event.registrationOpenDate) : "")
               : Locale.label("registration.closed")}
           </Typography>
         </CardContent>
@@ -97,7 +101,7 @@ export function EventRegister({ churchId, eventId, event }: Props) {
       <Card sx={{ borderRadius: 2 }}>
         <CardContent sx={{ textAlign: "center", py: 4 }}>
           <Icon sx={{ fontSize: 48, color: "error.main", mb: 1 }}>group_off</Icon>
-          <Typography variant="h6">{Locale.label("registration.eventFull")}</Typography>
+          <Typography variant="h6" component="h1">{Locale.label("registration.eventFull")}</Typography>
           <Typography variant="body2" color="text.secondary">
             {Locale.label("registration.capacityReached").replace("{}", String(event.capacity))}
           </Typography>
@@ -165,6 +169,7 @@ export function EventRegister({ churchId, eventId, event }: Props) {
             onPay={(p) => reg.submit(p)}
             onFinalized={(result) => reg.finishConfirm(result)}
             onBack={() => reg.setStep(reg.hasSelections ? "selections" : "members")}
+            onPayLater={() => reg.submit()}
           />
         </CardContent>
       </Card>
@@ -359,7 +364,7 @@ export function EventRegister({ churchId, eventId, event }: Props) {
   return (
     <Card sx={{ borderRadius: 2 }}>
       <CardContent>
-        <Typography variant="h5" sx={{ fontWeight: 700, mb: 1 }}>{event.title}</Typography>
+        <Typography variant="h5" component="h1" sx={{ fontWeight: 700, mb: 1 }}>{event.title}</Typography>
         <Typography variant="body2" component="div" color="text.secondary" sx={{ mb: 1 }}>
           <Icon sx={{ fontSize: 16, verticalAlign: "text-bottom", mr: 0.5 }}>schedule</Icon>
           {getDisplayTime()}

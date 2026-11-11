@@ -5,6 +5,7 @@ import { Box, FormControl, Grid, InputLabel, MenuItem, Select, TextField, Typogr
 import { ApiHelper, Loading, Locale } from "@churchapps/apphelper";
 import type { GroupInterface } from "@churchapps/helpers";
 import GroupCard from "./GroupCard";
+import { AutoScrollStrip } from "../elements/AutoScrollStrip";
 
 interface Props {
   churchId: string;
@@ -15,6 +16,8 @@ interface Props {
   defaultTitle?: string;
   showSearch?: boolean;
   showCategory?: boolean;
+  // "autoscroll" shows the matching groups in one row that steps along by itself.
+  layout?: "grid" | "autoscroll";
 }
 
 export const GroupsBrowser = (props: Props) => {
@@ -88,7 +91,7 @@ export const GroupsBrowser = (props: Props) => {
             <Grid size={{ xs: 12, md: searchMd }}>
               <TextField
                 fullWidth
-                placeholder="Search groups by name or description"
+                placeholder={Locale.label("groupsPage.searchPlaceholder", "Search groups by name or description")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 size="small"
@@ -99,13 +102,13 @@ export const GroupsBrowser = (props: Props) => {
           {showCategory && (
             <Grid size={{ xs: 12, md: 4 }}>
               <FormControl fullWidth size="small">
-                <InputLabel>Category</InputLabel>
+                <InputLabel>{Locale.label("groupsPage.category", "Category")}</InputLabel>
                 <Select
-                  label="Category"
+                  label={Locale.label("groupsPage.category", "Category")}
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   inputProps={{ "data-testid": "groups-browser-category" }}>
-                  <MenuItem value="">All categories</MenuItem>
+                  <MenuItem value="">{Locale.label("groupsPage.allCategories", "All categories")}</MenuItem>
                   {categories.map((c) => (
                     <MenuItem key={c} value={c}>{c}</MenuItem>
                   ))}
@@ -116,13 +119,13 @@ export const GroupsBrowser = (props: Props) => {
           {showCampus && (
             <Grid size={{ xs: 12, md: 4 }}>
               <FormControl fullWidth size="small">
-                <InputLabel>Campus</InputLabel>
+                <InputLabel>{Locale.label("groupsPage.campus", "Campus")}</InputLabel>
                 <Select
-                  label="Campus"
+                  label={Locale.label("groupsPage.campus", "Campus")}
                   value={campus}
                   onChange={(e) => setCampus(e.target.value)}
                   inputProps={{ "data-testid": "groups-browser-campus" }}>
-                  <MenuItem value="">All campuses</MenuItem>
+                  <MenuItem value="">{Locale.label("groupsPage.allCampuses", "All campuses")}</MenuItem>
                   {campuses.map((c) => (
                     <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
                   ))}
@@ -132,21 +135,27 @@ export const GroupsBrowser = (props: Props) => {
           )}
         </Grid>
       )}
-      <Grid container spacing={3}>
-        {filtered.length > 0 ? (
-          filtered.map((group) => (
-            <Grid key={group.id} size={{ xs: 12, sm: 6, md: 4 }}>
-              <GroupCard group={group} />
+      {props.layout === "autoscroll" && filtered.length > 0 ? (
+        <AutoScrollStrip enabled testId="groups-browser-strip">
+          {filtered.map((group) => <Box key={group.id} data-testid="groups-browser-tile"><GroupCard group={group} /></Box>)}
+        </AutoScrollStrip>
+      ) : (
+        <Grid container spacing={3}>
+          {filtered.length > 0 ? (
+            filtered.map((group) => (
+              <Grid key={group.id} size={{ xs: 12, sm: 6, md: 4 }}>
+                <GroupCard group={group} />
+              </Grid>
+            ))
+          ) : (
+            <Grid size={{ xs: 12 }}>
+              <Box data-testid="groups-browser-empty" sx={{ textAlign: "center", py: 4, color: "text.secondary" }}>
+                {Locale.label("groupsPage.noMatches", "No groups match your filters.")}
+              </Box>
             </Grid>
-          ))
-        ) : (
-          <Grid size={{ xs: 12 }}>
-            <Box data-testid="groups-browser-empty" sx={{ textAlign: "center", py: 4, color: "text.secondary" }}>
-              No groups match your filters.
-            </Box>
-          </Grid>
-        )}
-      </Grid>
+          )}
+        </Grid>
+      )}
     </Box>
   );
 };

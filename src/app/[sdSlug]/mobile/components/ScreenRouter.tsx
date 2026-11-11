@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { Locale } from "@churchapps/apphelper";
 import { ScreenSkeleton } from "./ScreenSkeleton";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
+import { HYMNS_ENABLED } from "@/features/hymns/enabled";
 import { PlaceholderPage } from "./PlaceholderPage";
 
 const loading = () => <ScreenSkeleton />;
@@ -26,6 +27,9 @@ const RegistrationsPage = dynamic(() => import("./screens/RegistrationsPage").th
 const MePage = dynamic(() => import("./screens/MePage").then(m => ({ default: m.MePage })), { loading });
 const RequestEventPage = dynamic(() => import("./screens/RequestEventPage").then(m => ({ default: m.RequestEventPage })), { loading });
 const MyRequestsPage = dynamic(() => import("./screens/MyRequestsPage").then(m => ({ default: m.MyRequestsPage })), { loading });
+const MyFormsPage = dynamic(() => import("./screens/MyFormsPage").then(m => ({ default: m.MyFormsPage })), { loading });
+const MyTasksPage = dynamic(() => import("./screens/MyTasksPage").then(m => ({ default: m.MyTasksPage })), { loading });
+const MyAttendancePage = dynamic(() => import("./screens/MyAttendancePage").then(m => ({ default: m.MyAttendancePage })), { loading });
 const VolunteerPage = dynamic(() => import("./screens/VolunteerPage").then(m => ({ default: m.VolunteerPage })), { loading });
 const NotificationsPage = dynamic(() => import("./screens/NotificationsPage").then(m => ({ default: m.NotificationsPage })), { loading });
 const NotificationPrefsPage = dynamic(() => import("./screens/NotificationPrefsPage").then(m => ({ default: m.NotificationPrefsPage })), { loading });
@@ -34,13 +38,20 @@ const WebsiteUrlPage = dynamic(() => import("./screens/WebsiteUrlPage").then(m =
 const MessageComposePage = dynamic(() => import("./screens/MessageComposePage").then(m => ({ default: m.MessageComposePage })), { loading });
 const MobileLoginScreen = dynamic(() => import("./screens/LoginPage").then(m => ({ default: m.MobileLoginScreen })), { loading });
 const MoreCardsPage = dynamic(() => import("./screens/MoreCardsPage").then(m => ({ default: m.MoreCardsPage })), { loading });
+const FolderPage = dynamic(() => import("./screens/FolderPage").then(m => ({ default: m.FolderPage })), { loading });
+const NewsPage = dynamic(() => import("./screens/NewsPage").then(m => ({ default: m.NewsPage })), { loading });
+const HymnsPage = dynamic(() => import("./screens/HymnsPage").then(m => ({ default: m.HymnsPage })), { loading });
 
 interface Props {
   pageSlug: string;
   config: ConfigurationInterface;
 }
 
-const ALIAS_TO_CANONICAL: Record<string, string> = { membersSearch: "community" };
+const ALIAS_TO_CANONICAL: Record<string, string> = {
+  membersSearch: "community",
+  giving: "donate",
+  attendance: "checkin"
+};
 
 export function ScreenRouter({ pageSlug, config }: Props) {
   const router = useRouter();
@@ -55,7 +66,11 @@ export function ScreenRouter({ pageSlug, config }: Props) {
   switch (effectiveSlug) {
     case "dashboard": return <DashboardPage config={config} />;
     case "more": return <MoreCardsPage config={config} />;
+    case "hymns": return HYMNS_ENABLED
+      ? <HymnsPage churchId={config?.church?.id} />
+      : <PlaceholderPage title={Locale.label("mobile.notFound.title")} description={Locale.label("mobile.notFound.body")} actionLabel={Locale.label("mobile.notFound.backToHome")} actionHref="/mobile/dashboard" />;
     case "sermons": return <SermonsPage config={config} />;
+    case "news": return <NewsPage config={config} />;
     case "groups":
     case "myGroups": return <GroupsPage config={config} />;
     case "community": return <CommunityPage config={config} />;
@@ -73,6 +88,9 @@ export function ScreenRouter({ pageSlug, config }: Props) {
     case "me": return <MePage config={config} />;
     case "requestEvent": return <RequestEventPage config={config} />;
     case "myRequests": return <MyRequestsPage config={config} />;
+    case "myForms": return <MyFormsPage config={config} />;
+    case "myAttendance": return <MyAttendancePage config={config} />;
+    case "myTasks": return <MyTasksPage config={config} />;
     case "volunteer":
     case "volunteerBrowse": return <VolunteerPage config={config} />;
     case "messages":
@@ -84,6 +102,7 @@ export function ScreenRouter({ pageSlug, config }: Props) {
     case "stream": return <StreamPage config={config} />;
     case "websiteUrl":
     case "page": return <WebsiteUrlPage config={config} />;
+    case "folder": return <FolderPage config={config} />;
     case "login": return <MobileLoginScreen config={config} />;
     default:
       console.warn("[mobile] unknown screen slug:", pageSlug);

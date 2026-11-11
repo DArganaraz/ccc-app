@@ -47,7 +47,8 @@ test.describe("Mobile community", () => {
 
   test("legacy /mobile/membersSearch slug redirects to /mobile/community", async ({ page }) => {
     await page.goto("/mobile/membersSearch");
-    await expect(page).toHaveURL(/\/mobile\/community/);
+    await expect(page).toHaveURL((url) => new URL(url).pathname === "/mobile/community");
+    await expect(page.getByRole("textbox", { name: /Search Members/i })).toBeVisible();
   });
 
   test("tapping a member opens their profile", async ({ page }) => {
@@ -80,6 +81,17 @@ test.describe("Mobile community", () => {
     await expect(main.getByRole("button", { name: /Send message/i })).toBeVisible({ timeout: 15000 });
   });
 
+  test("your own profile offers Edit profile instead of messaging, calling or texting yourself", async ({ page }) => {
+    await page.goto("/mobile/community/PER00000082");
+    const main = page.locator("main");
+    await expect(main.getByRole("button", { name: "Edit profile" })).toBeVisible({ timeout: 30000 });
+    // The demo user has a mobile phone on file, so Call/Text would show on anyone else's profile.
+    await expect(main.getByText("Mobile Phone")).toBeVisible();
+    await expect(main.getByRole("button", { name: /Send message/i })).toHaveCount(0);
+    await expect(main.getByRole("link", { name: "Call" })).toHaveCount(0);
+    await expect(main.getByRole("link", { name: /Send text message/i })).toHaveCount(0);
+  });
+
   test("minor profile hides the Message quick action", async ({ page }) => {
     // Noah Davis (PER00000030, b. 2020) is under the default-18 messaging minimum age.
     await page.goto("/mobile/community/PER00000030");
@@ -89,12 +101,34 @@ test.describe("Mobile community", () => {
     await expect(main.getByRole("button", { name: /Send message/i })).toHaveCount(0);
   });
 
-  test("Show in Directory of Staff hides the directory from a member", async ({ page }) => {
+  test("Show in Directory of Staff hides the directory from a member", async ({ browser }) => {
     await setDirectoryVisibility("Staff");
+    // demo@b1.church can view people, so the gate is checked as volunteer@b1.church, a plain member.
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const page = await context.newPage();
     try {
+      await page.goto("/mobile/login");
+      await page.locator('input[type="email"]').first().fill("volunteer@b1.church");
+      await page.locator('input[type="password"]').first().fill("password");
+      await page.locator('button[type="submit"]').first().click();
+      await page.waitForURL(/\/mobile\/dashboard/, { timeout: 30000 });
       await page.goto("/mobile/community");
       await expect(page.getByText("Members Only")).toBeVisible({ timeout: 30000 });
       await expect(page.getByRole("textbox", { name: /Search Members/i })).toHaveCount(0);
+    } finally {
+      await context.close();
+      await setDirectoryVisibility("Members");
+    }
+  });
+
+  test("an admin sees the mobile directory when Show in Directory is Staff", async ({ page }) => {
+    // demo@b1.church is a Domain Admin whose own status is Member; People View lets them past the Staff tier.
+    await setDirectoryVisibility("Staff");
+    try {
+      await page.goto("/mobile/community");
+      await expect(page.getByRole("textbox", { name: /Search Members/i })).toBeVisible({ timeout: 30000 });
+      await expect(page.locator("main")).toContainText(/Donald/, { timeout: 30000 });
+      await expect(page.getByText("Members Only")).toHaveCount(0);
     } finally {
       await setDirectoryVisibility("Members");
     }

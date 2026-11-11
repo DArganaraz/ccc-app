@@ -1,6 +1,9 @@
 import { test, expect, APIRequestContext } from "@playwright/test";
 import { mobileLogoutButton } from "./helpers/mobile";
 
+// The pickup-code and stale-group-link cases both check Emma in and clear her visits, so run this file in order on one worker.
+test.describe.configure({ mode: "default" });
+
 test.describe("Mobile checkin", () => {
   test("checkin page loads with logged-in chrome", async ({ page }) => {
     await page.goto("/mobile/checkin");
@@ -89,6 +92,77 @@ test.describe("Mobile checkin pickup code", () => {
     await expect(page.getByRole("heading", { level: 1, name: /You're checked in/i })).toBeVisible();
     await expect(page.locator("main")).toContainText(securityCode);
   });
+
+  // Issue #1408: someone already checked in today is marked, and checking in again asks first.
+  test("a person checked in today is marked and checking in again asks first", async ({ page, request }) => {
+    const jwt = await attendanceJwt(request);
+    await clearTodaysVisits(request, jwt);
+    const visit = { personId: EMMA, serviceId: SERVICE, visitSessions: [{ session: { serviceTimeId: "SST00000001", groupId: "GRP00000009" } }] };
+    const res = await request.post(API + "/attendance/visits/checkin?serviceId=" + SERVICE + "&peopleIds=" + EMMA + "&acknowledgeWarnings=true", { headers: { Authorization: "Bearer " + jwt }, data: [visit] });
+    expect(res.ok()).toBeTruthy();
+
+    await page.goto("/mobile/checkin");
+    await page.getByTestId("select-service-" + SERVICE + "-button").click({ timeout: 30000 });
+    await expect(page.getByTestId("select-member-" + EMMA)).toContainText("Already Checked In", { timeout: 30000 });
+
+    await page.getByTestId("checkin-submit-button").click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet).toContainText(/already checked in for this service/);
+    await expect(sheet.getByRole("button", { name: "Check In Again" })).toBeVisible();
+    await sheet.getByRole("button", { name: "Cancel" }).click();
+    await expect(sheet).toHaveCount(0);
+  });
+});
+
+// A service time still linked to an archived group crashed mobile check-in with a client-side exception.
+test.describe("Mobile checkin with a stale group link", () => {
+  const API = process.env.API_BASE || "http://localhost:8084";
+  const EMMA = "PER00000085";
+  const SERVICE = "SER00000001";
+  const SERVICE_TIME = "SST00000001";
+  let groupId = "";
+  let linkId = "";
+
+  const jwts = async (request: APIRequestContext) => {
+    const res = await request.post(API + "/membership/users/login", { data: { email: "demo@b1.church", password: "password" } });
+    const church = (await res.json()).userChurches.find((c: any) => c.church.id === "CHU00000001");
+    const jwt = (key: string) => ({ Authorization: "Bearer " + church.apis.find((a: any) => a.keyName === key).jwt });
+    return { attendance: jwt("AttendanceApi"), membership: jwt("MembershipApi") };
+  };
+
+  const clearTodaysVisits = async (request: APIRequestContext, headers: any) => {
+    const today = new Date().toLocaleDateString("en-CA");
+    const visits = await (await request.get(API + "/attendance/visits?personId=" + EMMA, { headers })).json();
+    for (const v of Array.isArray(visits) ? visits : []) {
+      if (v.id && String(v.visitDate).slice(0, 10) === today) await request.delete(API + "/attendance/visits/" + v.id, { headers });
+    }
+  };
+
+  test.beforeAll(async ({ request }) => {
+    const h = await jwts(request);
+    await clearTodaysVisits(request, h.attendance);
+    const groups = await (await request.post(API + "/membership/groups", { headers: h.membership, data: [{ categoryName: "Children", name: "Zacchaeus Archived Room", trackAttendance: true, archived: true }] })).json();
+    groupId = groups[0].id;
+    const links = await (await request.post(API + "/attendance/groupservicetimes", { headers: h.attendance, data: [{ groupId, serviceTimeId: SERVICE_TIME }] })).json();
+    linkId = links[0].id;
+    const visit = { personId: EMMA, serviceId: SERVICE, visitSessions: [{ session: { serviceTimeId: SERVICE_TIME, groupId } }] };
+    const res = await request.post(API + "/attendance/visits/checkin?serviceId=" + SERVICE + "&peopleIds=" + EMMA + "&acknowledgeWarnings=true", { headers: h.attendance, data: [visit] });
+    expect(res.ok()).toBeTruthy();
+  });
+
+  test.afterAll(async ({ request }) => {
+    const h = await jwts(request);
+    await clearTodaysVisits(request, h.attendance);
+    if (linkId) await request.delete(API + "/attendance/groupservicetimes/" + linkId, { headers: h.attendance });
+    if (groupId) await request.delete(API + "/membership/groups/" + groupId, { headers: h.membership });
+  });
+
+  test("the household step still renders when a service time links to an archived group", async ({ page }) => {
+    await page.goto("/mobile/checkin");
+    await page.getByTestId("select-service-" + SERVICE + "-button").click({ timeout: 30000 });
+    await expect(page.getByTestId("checkin-submit-button")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(/Application error/i)).toHaveCount(0);
+  });
 });
 
 test.describe("Mobile checkin schedule", () => {
@@ -117,10 +191,54 @@ test.describe("Mobile checkin schedule", () => {
     await request.delete(API + "/attendance/services/" + serviceId, { headers });
   });
 
-  test("a service whose check-in window is closed says so instead of listing its times", async ({ page }) => {
+  test("a service whose check-in window is closed says when it opens instead of listing its times", async ({ page }) => {
     await page.goto("/mobile/checkin");
     await page.getByTestId("select-service-" + serviceId + "-button").click({ timeout: 30000 });
-    await expect(page.getByTestId("checkin-not-open")).toHaveText("Check-in isn't open for this service right now.", { timeout: 30000 });
+    await expect(page.getByTestId("checkin-not-open")).toHaveText(/^Check-in opens \w{3} 9:00\sAM\.$/, { timeout: 30000 });
     await expect(page.locator("main")).not.toContainText("Zacchaeus Closed Time");
+  });
+});
+
+// Issue #1449: a room short on volunteers used to read as a connection error.
+test.describe("Mobile checkin volunteer ratio", () => {
+  const API = process.env.API_BASE || "http://localhost:8084";
+  const EMMA = "PER00000085";
+  const SERVICE = "SER00000001";
+
+  const attendanceHeaders = async (request: APIRequestContext) => {
+    const res = await request.post(API + "/membership/users/login", { data: { email: "demo@b1.church", password: "password" } });
+    const church = (await res.json()).userChurches.find((c: any) => c.church.id === "CHU00000001");
+    return { Authorization: "Bearer " + church.apis.find((a: any) => a.keyName === "AttendanceApi").jwt };
+  };
+
+  const clearTodaysVisits = async (request: APIRequestContext) => {
+    const headers = await attendanceHeaders(request);
+    const today = new Date().toLocaleDateString("en-CA");
+    const visits = await (await request.get(API + "/attendance/visits?personId=" + EMMA, { headers })).json();
+    for (const v of Array.isArray(visits) ? visits : []) {
+      if (v.id && String(v.visitDate).slice(0, 10) === today) await request.delete(API + "/attendance/visits/" + v.id, { headers });
+    }
+  };
+
+  test("check-in into a room short on volunteers names the room instead of blaming the connection", async ({ page, request }) => {
+    await clearTodaysVisits(request);
+    try {
+      // Elementary (K-2) seeds volunteerRatio 5 / minVolunteers 1 with no volunteers checked in, so the Api answers 409 ratio.
+      const checkin = page.waitForResponse((r) => r.url().includes("/attendance/visits/checkin") && r.request().method() === "POST");
+      await page.goto("/mobile/checkin");
+      await page.getByTestId("select-service-" + SERVICE + "-button").click({ timeout: 30000 });
+      await page.getByTestId("select-member-" + EMMA).click({ timeout: 30000 });
+      await page.getByTestId("service-time-SST00000001").click();
+      await page.getByText("Elementary (K-2)", { exact: true }).click({ timeout: 30000 });
+      await page.getByTestId("checkin-submit-button").click({ timeout: 30000 });
+      const resp = await checkin;
+      expect(resp.status()).toBe(409);
+      expect((await resp.json()).error).toBe("ratio");
+      const main = page.locator("main");
+      await expect(main).toContainText("Elementary (K-2) doesn't have enough volunteers", { timeout: 15000 });
+      await expect(main).not.toContainText("check your connection");
+    } finally {
+      await clearTodaysVisits(request);
+    }
   });
 });

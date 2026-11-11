@@ -1,3 +1,5 @@
+import { HYMNS_ENABLED } from "@/features/hymns/enabled";
+
 // membersSearch absent: must reach ScreenRouter to run its redirect per-navigation.
 const TAB_ALIASES: Record<string, string> = {
   myGroups: "groups",
@@ -14,6 +16,7 @@ const KEEP_ALIVE_TABS = new Set([
   "more",
   "me",
   "sermons",
+  ...(HYMNS_ENABLED ? ["hymns"] : []),
   "groups",
   "community",
   "donate",
@@ -22,6 +25,7 @@ const KEEP_ALIVE_TABS = new Set([
   "votd",
   "bible",
   "registrations",
+  "myRequests",
   "volunteer",
   "messages"
 ]);

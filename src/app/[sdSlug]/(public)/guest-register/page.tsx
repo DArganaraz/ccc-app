@@ -19,20 +19,24 @@ const loadSharedData = (sdSlug: string) => {
 export async function generateMetadata({ params }: { params: PageParams }): Promise<Metadata> {
   const { sdSlug } = await params;
   const props = await loadSharedData(sdSlug);
-  return MetaHelper.getMetaData(Locale.label("guestRegister.metaTitle") + " - " + props.config.church.name, Locale.label("guestRegister.metaDescription"), undefined, props.config.appearance);
+  const metadata = MetaHelper.getMetaData(Locale.label("guestRegister.metaTitle") + " - " + props.config.church.name, Locale.label("guestRegister.metaDescription"), undefined, props.config.appearance);
+  // Every church has this URL; until guest sign-up is on, it only says that it is off.
+  if (!props.enabled) metadata.robots = { index: false, follow: true };
+  return metadata;
 }
 
 const loadData = async (sdSlug: string) => {
   const config = await ConfigHelper.load(sdSlug);
   const publicSettings: any = await ApiHelper.getAnonymous("/settings/public/" + config.church.id, "MembershipApi");
   const enabled = publicSettings?.enableQRGuestRegistration === "true";
-  return { config, enabled };
+  const imageUrl: string = publicSettings?.guestRegistrationImage || "";
+  return { config, enabled, imageUrl };
 };
 
 export default async function GuestRegisterPage({ params }: { params: PageParams }) {
   await EnvironmentHelper.initServerSide();
   const { sdSlug } = await params;
-  const { config, enabled } = await loadSharedData(sdSlug);
+  const { config, enabled, imageUrl } = await loadSharedData(sdSlug);
 
   return (
     <>
@@ -40,8 +44,8 @@ export default async function GuestRegisterPage({ params }: { params: PageParams
       <DefaultPageWrapper config={config}>
         <Container maxWidth="sm" sx={{ paddingTop: 4, paddingBottom: 4 }}>
           {enabled
-            ? <GuestRegister churchId={config.church.id || ""} />
-            : <Typography variant="h6" sx={{ textAlign: "center", color: "text.secondary", paddingTop: 8 }}>
+            ? <GuestRegister churchId={config.church.id || ""} imageUrl={imageUrl} />
+            : <Typography variant="h6" component="h1" sx={{ textAlign: "center", color: "text.secondary", paddingTop: 8 }}>
               {Locale.label("guestRegister.notEnabled")}
             </Typography>
           }

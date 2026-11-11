@@ -1,4 +1,5 @@
 import { Locale } from "@churchapps/apphelper";
+import { HYMNS_ENABLED } from "@/features/hymns/enabled";
 
 // `radius` is numeric for backwards-compat; `radiusVar` is CSS-variable for new code inheriting admin overrides.
 export const mobileTheme = {
@@ -11,6 +12,9 @@ export const mobileTheme = {
     surface: "var(--mb-surface)",
     surfaceVariant: "var(--mb-surface-variant)",
     text: "var(--mb-text)",
+    onBackground: "var(--mb-on-background)",
+    onBackgroundMuted: "var(--mb-on-background-muted)",
+    linkOnBackground: "var(--mb-link-on-background)",
     textSecondary: "var(--mb-text-secondary)",
     textMuted: "var(--mb-text-muted)",
     textHint: "var(--mb-text-hint)",
@@ -80,6 +84,13 @@ export const mobileTheme = {
   }
 };
 
+// Scope for chrome drawn straight on the page background: a church text color chosen for white surfaces may not read there.
+export const onBackgroundVars = {
+  "--mb-text": "var(--mb-on-background)",
+  "--mb-text-secondary": "var(--mb-on-background-muted)",
+  "--mb-link": "var(--mb-link-on-background)"
+} as const;
+
 export const SCREEN_TITLES: Record<string, string> = new Proxy({} as Record<string, string>, {
   get(_target, prop: string) {
     const map: Record<string, string> = {
@@ -100,7 +111,10 @@ export const SCREEN_TITLES: Record<string, string> = new Proxy({} as Record<stri
       plans: Locale.label("mobile.screenTitles.plans"),
       planDetails: Locale.label("mobile.screenTitles.planDetails"),
       sermons: Locale.label("mobile.screenTitles.sermons"),
+      hymns: "Hymns",
       sermonDetails: Locale.label("mobile.screenTitles.sermonDetails"),
+      news: Locale.label("mobile.dashboard.news"),
+      newsDetails: Locale.label("mobile.dashboard.news"),
       playlist: Locale.label("mobile.screenTitles.playlist"),
       playlistDetails: Locale.label("mobile.screenTitles.playlist"),
       searchMessageUser: Locale.label("mobile.screenTitles.messages"),
@@ -115,6 +129,9 @@ export const SCREEN_TITLES: Record<string, string> = new Proxy({} as Record<stri
       notificationPrefs: Locale.label("mobile.screenTitles.notificationPrefs"),
       me: Locale.label("mobile.me.title"),
       myRequests: Locale.label("mobile.screenTitles.myRequests"),
+      myForms: Locale.label("mobile.screenTitles.myForms"),
+      myAttendance: Locale.label("mobile.screenTitles.myAttendance"),
+      myTasks: Locale.label("mobile.screenTitles.myTasks"),
       requestEvent: Locale.label("mobile.screenTitles.requestEvent"),
       profileEdit: Locale.label("mobile.screenTitles.profileEdit"),
       stream: Locale.label("mobile.screenTitles.stream"),
@@ -141,7 +158,8 @@ export const linkTypeToRoute = (
   linkType?: string,
   linkData?: string,
   text?: string,
-  url?: string
+  url?: string,
+  id?: string
 ): string | null => {
   switch (linkType) {
     case "groups": return "/mobile/groups";
@@ -154,8 +172,10 @@ export const linkTypeToRoute = (
     case "bible": return "/mobile/bible";
     case "votd": return "/mobile/votd";
     case "sermons": return "/mobile/sermons";
+    case "hymns": return HYMNS_ENABLED ? "/mobile/hymns" : null;
     case "stream": return "/mobile/stream";
     case "registrations": return "/mobile/registrations";
+    case "requests": return "/mobile/myRequests";
     case "page": {
       const id = url || linkData || "";
       const params = new URLSearchParams();
@@ -163,6 +183,12 @@ export const linkTypeToRoute = (
       if (text) params.set("title", text);
       const qs = params.toString();
       return qs ? `/mobile/page?${qs}` : "/mobile/page";
+    }
+    case "folder": {
+      if (!id) return null;
+      const params = new URLSearchParams({ id });
+      if (text) params.set("title", text);
+      return `/mobile/folder?${params.toString()}`;
     }
     case "url": {
 
@@ -186,8 +212,10 @@ export const linkTypeToIcon = (linkType?: string, itemIcon?: string): string => 
     case "bible": return "menu_book";
     case "votd": return "auto_stories";
     case "sermons": return "play_circle";
+    case "hymns": return "music_note";
     case "stream": return "live_tv";
     case "url": return "public";
+    case "folder": return "folder";
     default: return "apps";
   }
 };

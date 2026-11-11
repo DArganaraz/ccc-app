@@ -1,33 +1,42 @@
 "use client";
 
-import React, { useContext, useMemo } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import Link from "next/link";
 import { Avatar, Box, Button, Skeleton, Typography } from "@mui/material";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import { ApiHelper, ArrayHelper, CurrencyHelper, DateHelper, Locale, PersonHelper } from "@churchapps/apphelper";
 import { useQuery } from "@tanstack/react-query";
-import type { AssignmentInterface, DonationInterface, GroupInterface, PersonInterface, PlanInterface, PositionInterface, RegistrationInterface } from "@churchapps/helpers";
+import type { AssignmentInterface, DonationInterface, PersonInterface, PlanInterface, PositionInterface, TaskInterface } from "@churchapps/helpers";
 import UserContext from "@/context/UserContext";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
 import { mobileTheme } from "../mobileTheme";
-import { EventProcessor } from "../../helpers/eventProcessor";
+import { expandUpcomingEvents, upcomingKindMeta, type UpcomingKind } from "../HomeTeasers";
+import { memberGivingYearLimit } from "../../helpers/givingYears";
+import { attendanceSubtitle, attendanceTitle, useMyAttendance, useMyCards, useMyFormSubmissions, useMyGroups, useMyRegistrations, useMyTasks } from "../../helpers/myRecords";
 import { formatRelative, deriveNotificationUrl, getInitials } from "../util";
 import type { EventRow } from "../group/GroupCalendarTab";
-import { BackVerb, BigNumber, PageHead, Pill, PillRow, Plate, PlateSection, QuietEmpty, RecordLayout, Row, RowList, StatusBadge, TextLink, useSliceView, type BadgeTone } from "../kit";
+import { MyTaskSheet, TaskRow } from "./CardSheet";
+import { BackVerb, BigNumber, PageHead, Pill, PillRow, Plate, PlateSection, QuietEmpty, RecordLayout, Row, RowList, StatusBadge, TextLink, useSliceView } from "../kit";
 
 interface Props {
   config: ConfigurationInterface;
 }
 
-type ItemKind = "serving" | "event" | "registration";
-
 interface UpcomingItem {
-  kind: ItemKind;
+  kind: UpcomingKind;
   date: Date;
   title: string;
   subtitle?: string;
   href: string;
   key: string;
+  photoUrl?: string;
+  allDay?: boolean;
+}
+
+interface PlanTime {
+  planId?: string;
+  startTime?: string | Date;
+  teams?: string;
 }
 
 interface NotificationItem {
@@ -43,12 +52,6 @@ interface HouseholdMember extends PersonInterface {
   householdRole?: string;
 }
 
-const kindMeta: Record<ItemKind, { tone: BadgeTone; label: string }> = {
-  serving: { tone: "warn", label: "mobile.me.serving" },
-  event: { tone: "pri", label: "mobile.me.event" },
-  registration: { tone: "ok", label: "mobile.me.registration" }
-};
-
 const TEASER_COUNT = 3;
 
 export const MePage = ({ config }: Props) => {
@@ -57,7 +60,7 @@ export const MePage = ({ config }: Props) => {
   const [view, setView] = useSliceView();
   const loggedIn = !!context?.user?.firstName;
   const personId = context?.person?.id || context?.userChurch?.person?.id;
-  const givingEnabled = config?.allowDonations !== false && !!personId;
+  const givingEnabled = !!personId;
 
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery<AssignmentInterface[]>({
     queryKey: ["/assignments/my", "DoingApi", context?.user?.id],
@@ -95,15 +98,18 @@ export const MePage = ({ config }: Props) => {
     staleTime: 10 * 60 * 1000
   });
 
-  const { data: registrations = [], isLoading: registrationsLoading } = useQuery<RegistrationInterface[]>({
-    queryKey: ["/registrations/person", personId],
+  // Plans store only a date; the service times carry the hour.
+  const { data: planTimes = [] } = useQuery<PlanTime[]>({
+    queryKey: ["/times/plans", "DoingApi", planIdsKey],
     queryFn: async () => {
-      const data = await ApiHelper.get("/registrations/person/" + personId, "ContentApi");
+      const data = await ApiHelper.get("/times/plans?planIds=" + planIdsKey, "DoingApi");
       return Array.isArray(data) ? data : [];
     },
-    enabled: loggedIn && !!personId,
-    staleTime: 60 * 1000
+    enabled: loggedIn && planIds.length > 0,
+    staleTime: 10 * 60 * 1000
   });
+
+  const { data: registrations = [], isLoading: registrationsLoading } = useMyRegistrations(personId, loggedIn);
 
   const { data: timeline = [], isLoading: timelineLoading } = useQuery<EventRow[]>({
     queryKey: ["/events/timeline"],
@@ -156,16 +162,12 @@ export const MePage = ({ config }: Props) => {
     enabled: loggedIn && !!householdId
   });
 
-  const { data: groups = [] } = useQuery<GroupInterface[]>({
-    queryKey: ["my-groups", context?.user?.id],
-    queryFn: async () => {
-      const data = await ApiHelper.get("/groups/my", "MembershipApi");
-      return Array.isArray(data) ? data : [];
-    },
-    enabled: loggedIn,
-    staleTime: 5 * 60 * 1000,
-    gcTime: 15 * 60 * 1000
-  });
+  const { data: groups = [] } = useMyGroups(loggedIn, context?.user?.id);
+  const { data: myCards = [] } = useMyCards(loggedIn);
+  const { data: myTasks = [] } = useMyTasks(personId, loggedIn);
+  const [openTask, setOpenTask] = useState<TaskInterface | null>(null);
+  const { data: formSubmissions = [], isLoading: formsLoading } = useMyFormSubmissions(loggedIn);
+  const { data: attendance = [], isLoading: attendanceLoading } = useMyAttendance(loggedIn);
 
   const { data: donations = [] } = useQuery<DonationInterface[]>({
     queryKey: ["donations", personId],
@@ -185,9 +187,16 @@ export const MePage = ({ config }: Props) => {
       if (!position) return;
       const plan = plans.find((p) => p.id === position.planId);
       if (!plan?.serviceDate) return;
-      const date = DateHelper.toDate(plan.serviceDate);
-      if (date < new Date(now.getFullYear(), now.getMonth(), now.getDate())) return;
-      items.push({ kind: "serving", date, title: plan.name || Locale.label("mobile.me.serving"), subtitle: position.name, href: `/mobile/plans/${plan.id}`, key: `serv-${a.id}` });
+      const serviceDate = DateHelper.toDate(plan.serviceDate);
+      if (serviceDate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) return;
+      const category = position.categoryName || "";
+      const times = planTimes
+        .filter((t) => t.planId === plan.id && t.startTime)
+        .map((t) => ({ start: new Date(t.startTime as string | Date), teams: (t.teams || "").split(",").map((s) => s.trim()) }))
+        .sort((x, y) => x.start.getTime() - y.start.getTime());
+      const time = times.find((t) => category && t.teams.includes(category)) || times[0];
+      const date = time ? time.start : serviceDate;
+      items.push({ kind: "serving", date, allDay: !time, title: plan.name || Locale.label("mobile.me.serving"), subtitle: position.name, href: `/mobile/plans/${plan.id}`, key: `serv-${a.id}` });
     });
 
     registrations.forEach((r) => {
@@ -195,27 +204,15 @@ export const MePage = ({ config }: Props) => {
       if (!start) return;
       const date = new Date(start);
       if (isNaN(date.getTime()) || date < now || r.status === "cancelled") return;
-      items.push({ kind: "registration", date, title: (r as any).event?.title || Locale.label("mobile.me.registration"), href: "/mobile/registrations", key: `reg-${r.id}` });
+      items.push({ kind: "registration", date, title: (r as any).event?.title || Locale.label("mobile.me.registration"), href: "/mobile/registrations", key: `reg-${r.id}`, photoUrl: (r as any).event?.photoUrl || undefined });
     });
 
     // Expand recurring group events across the next few months, keep future occurrences.
-    const normalized = EventProcessor.updateTime(timeline as any);
-    const months = [new Date(now.getFullYear(), now.getMonth(), 1), new Date(now.getFullYear(), now.getMonth() + 1, 1), new Date(now.getFullYear(), now.getMonth() + 2, 1)];
-    const seen = new Set<string>();
-    months.forEach((month) => {
-      EventProcessor.expandEventsForMonth(normalized, month).forEach((e: any) => {
-        const date = e.start instanceof Date ? e.start : new Date(e.start);
-        if (isNaN(date.getTime()) || date < now) return;
-        const key = `evt-${e.id}-${date.getTime()}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        items.push({ kind: "event", date, title: e.title || Locale.label("mobile.me.event"), href: e.groupId ? `/mobile/groups/${e.groupId}?activeTab=events` : "/mobile/groups", key });
-      });
-    });
+    expandUpcomingEvents(timeline, now).forEach((e) => items.push({ kind: "event", ...e }));
 
     items.sort((a, b) => a.date.getTime() - b.date.getTime());
     return items.slice(0, 12);
-  }, [assignments, positions, plans, registrations, timeline]);
+  }, [assignments, positions, plans, planTimes, registrations, timeline]);
 
   const recentNotifications = useMemo(() => (notifications || []).slice(0, 2), [notifications]);
 
@@ -227,6 +224,11 @@ export const MePage = ({ config }: Props) => {
     const total = currencies.size === 1 ? gifts.reduce((sum, d) => sum + Number((d as any).fund?.amount ?? d.amount ?? 0), 0) : null;
     return { year, count: gifts.length, total, currency: [...currencies][0] || "usd" };
   }, [donations]);
+
+  const attendedLast90 = useMemo(() => {
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    return attendance.filter((r) => r.visitDate && new Date(r.visitDate).getTime() >= cutoff).length;
+  }, [attendance]);
 
   const otherHousehold = household.filter((h) => h.id !== personId);
   const activeRegistrations = registrations.filter((r) => r.status !== "cancelled").length;
@@ -248,9 +250,10 @@ export const MePage = ({ config }: Props) => {
       key={item.key}
       href={item.href}
       data-testid={`me-item-${item.kind}`}
+      leading={item.photoUrl ? <Box component="img" src={item.photoUrl} alt="" loading="lazy" data-testid="me-item-photo" sx={{ width: 64, height: 36, objectFit: "cover", borderRadius: "6px", flexShrink: 0, display: "block" }} /> : undefined}
       title={item.title}
-      subtitle={`${DateHelper.prettyDateTime(item.date)}${item.subtitle ? ` · ${item.subtitle}` : ""}`}
-      trailing={<StatusBadge tone={kindMeta[item.kind].tone}>{Locale.label(kindMeta[item.kind].label)}</StatusBadge>}
+      subtitle={`${item.allDay ? DateHelper.prettyDate(item.date) : DateHelper.prettyDateTime(item.date)}${item.subtitle ? ` · ${item.subtitle}` : ""}`}
+      trailing={<StatusBadge tone={upcomingKindMeta[item.kind].tone}>{Locale.label(upcomingKindMeta[item.kind].label)}</StatusBadge>}
     />
   );
 
@@ -299,6 +302,18 @@ export const MePage = ({ config }: Props) => {
             {upcomingList(upcoming.slice(0, TEASER_COUNT))}
           </PlateSection>
 
+          {myCards.length > 0 && (
+            <PlateSection data-testid="me-cards-section" title={Locale.label("mobile.me.myCards")} action={myCards.length > TEASER_COUNT ? <TextLink href="/mobile/myTasks" data-testid="me-cards-all">{Locale.label("mobile.me.allCards")}</TextLink> : undefined}>
+              <RowList>{myCards.slice(0, TEASER_COUNT).map((t) => <TaskRow key={t.id} task={t} onOpen={setOpenTask} />)}</RowList>
+            </PlateSection>
+          )}
+
+          {myTasks.length > 0 && (
+            <PlateSection data-testid="me-tasks-section" title={Locale.label("mobile.me.myTasks")} action={myTasks.length > TEASER_COUNT ? <TextLink href="/mobile/myTasks" data-testid="me-tasks-all">{Locale.label("mobile.me.allTasks")}</TextLink> : undefined}>
+              <RowList>{myTasks.slice(0, TEASER_COUNT).map((t) => <TaskRow key={t.id} task={t} onOpen={setOpenTask} />)}</RowList>
+            </PlateSection>
+          )}
+
           {otherHousehold.length > 0 && (
             <PlateSection title={Locale.label("mobile.screens.tabHousehold")} action={<TextLink href="/mobile/profileEdit">{Locale.label("mobile.screens.tabManage")}</TextLink>}>
               <PillRow>
@@ -321,21 +336,54 @@ export const MePage = ({ config }: Props) => {
               )}
           </PlateSection>
 
-          {givingEnabled && (
+          {givingEnabled && memberGivingYearLimit(config?.appearance as Record<string, unknown>) >= givingThisYear.year && (
             <PlateSection title={Locale.label("mobile.screenTitles.donation")} action={<TextLink href="/mobile/donate" data-testid="me-shortcut-donate">{Locale.label("mobile.screens.tabHistory")}</TextLink>}>
               {givingThisYear.count === 0
                 ? <QuietEmpty>{Locale.label("mobile.me.noGiftsThisYear").replace("{}", String(givingThisYear.year))}</QuietEmpty>
                 : (
-                  <BigNumber caption={Locale.label("mobile.me.givenThisYear").replace("{0}", String(givingThisYear.year)).replace("{1}", String(givingThisYear.count))}>
+                  <BigNumber caption={Locale.label(givingThisYear.count === 1 ? "mobile.me.givenThisYearOne" : "mobile.me.givenThisYear").replace("{0}", String(givingThisYear.year)).replace("{1}", String(givingThisYear.count))}>
                     {givingThisYear.total !== null ? CurrencyHelper.formatCurrencyWithLocale(givingThisYear.total, givingThisYear.currency) : givingThisYear.count}
                   </BigNumber>
                 )}
             </PlateSection>
           )}
 
+          <PlateSection title={Locale.label("mobile.me.myForms")} action={<TextLink href="/mobile/myForms" data-testid="me-shortcut-myForms">{Locale.label("mobile.me.allForms")}</TextLink>}>
+            {formsLoading
+              ? [0, 1].map((i) => <Skeleton key={i} variant="text" height={44} />)
+              : formSubmissions.length === 0
+                ? <QuietEmpty>{Locale.label("mobile.me.noForms")}</QuietEmpty>
+                : (
+                  <RowList>
+                    {formSubmissions.slice(0, TEASER_COUNT).map((s) => (
+                      <Row key={s.id} href="/mobile/myForms" data-testid="me-form-row" title={s.form?.name || Locale.label("mobile.me.form")} subtitle={s.submissionDate ? DateHelper.prettyDate(new Date(s.submissionDate)) : undefined} />
+                    ))}
+                  </RowList>
+                )}
+          </PlateSection>
+
+          <PlateSection title={Locale.label("mobile.me.myAttendance")} action={<TextLink href="/mobile/myAttendance" data-testid="me-shortcut-myAttendance">{Locale.label("mobile.screens.tabHistory")}</TextLink>}>
+            {attendanceLoading
+              ? [0, 1].map((i) => <Skeleton key={i} variant="text" height={44} />)
+              : attendance.length === 0
+                ? <QuietEmpty>{Locale.label("mobile.me.noAttendance")}</QuietEmpty>
+                : (
+                  <>
+                    <Typography sx={{ fontSize: 15, color: tc.text }}>
+                      {Locale.label(attendedLast90 === 1 ? "mobile.me.attendedLast90One" : "mobile.me.attendedLast90").replace("{}", String(attendedLast90))}
+                    </Typography>
+                    <RowList>
+                      {attendance.slice(0, TEASER_COUNT).map((r, idx) => (
+                        <Row key={idx} href="/mobile/myAttendance" data-testid="me-attendance-row" title={attendanceTitle(r, groups)} subtitle={attendanceSubtitle(r, groups)} />
+                      ))}
+                    </RowList>
+                  </>
+                )}
+          </PlateSection>
+
           <PlateSection title={Locale.label("mobile.me.requestsAndRegistrations")}>
             <Typography sx={{ fontSize: 15, color: tc.text }}>
-              {Locale.label("mobile.me.registrationCount").replace("{}", String(activeRegistrations))}
+              {Locale.label(activeRegistrations === 1 ? "mobile.me.registrationCountOne" : "mobile.me.registrationCount").replace("{}", String(activeRegistrations))}
             </Typography>
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", mt: "8px" }}>
               <TextLink href="/mobile/registrations" data-testid="me-shortcut-registrations">{Locale.label("mobile.screenTitles.registrations")}</TextLink>
@@ -361,6 +409,7 @@ export const MePage = ({ config }: Props) => {
           </PlateSection>
         </Plate>
       </RecordLayout>
+      <MyTaskSheet task={openTask} onClose={() => setOpenTask(null)} />
     </Box>
   );
 };

@@ -57,23 +57,28 @@ const Intro = ({ children }: { children: React.ReactNode }) => (
 // The Api answers a blocked check-in with 409 and a JSON body; ApiHelper rethrows that body as the message.
 const checkinErrorLabel = (e: any) => {
   try {
-    const reason = JSON.parse(e?.message || "")?.error;
+    const body = JSON.parse(e?.message || "");
+    const reason = body?.error;
     if (reason === "notOpen") return Locale.label("mobile.screens.checkinNotOpen");
     if (reason === "capacity") return Locale.label("mobile.screens.checkinFull");
+    if (reason === "ratio") {
+      const room = body?.groups?.[0]?.groupName || Locale.label("mobile.screens.checkinRatioRoom");
+      return Locale.label("mobile.screens.checkinRatio").replace("{}", room);
+    }
   } catch { /* not a gate response */ }
   return Locale.label("mobile.details.checkConnection");
 };
 
 const sessionGroupName = (vs: VisitSessionInterface) => {
   const st: ServiceTimeInterface | null = ArrayHelper.getOne(CheckinHelper.serviceTimes || [], "id", vs.session?.serviceTimeId || "");
-  const group: GroupInterface = ArrayHelper.getOne(st?.groups || [], "id", vs.session?.groupId || "");
+  const group: GroupInterface = ArrayHelper.getOne((st?.groups || []).filter((g) => g != null), "id", vs.session?.groupId || "");
   return { group: group?.name || Locale.label("mobile.screens.none"), time: st?.name || "" };
 };
 
 const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
   const [selectingId, setSelectingId] = useState<string>("");
   const [error, setError] = useState("");
-  const [notOpen, setNotOpen] = useState(false);
+  const [notOpen, setNotOpen] = useState<string | null>(null);
 
   const { data: services = [], isLoading } = useQuery<ServiceInterface[]>({
     queryKey: ["/services", "AttendanceApi"],
@@ -99,7 +104,7 @@ const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
   const selectService = async (serviceId: string) => {
     setSelectingId(serviceId);
     setError("");
-    setNotOpen(false);
+    setNotOpen(null);
     let allClosed = false;
     try {
       const householdId = PersonHelper.person?.householdId;
@@ -107,9 +112,8 @@ const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
         ApiHelper.get("/servicetimes?serviceId=" + serviceId, "AttendanceApi").then(
           (times: ServiceTimeInterface[]) => {
             CheckinHelper.serviceId = serviceId;
-            // Service times outside their scheduled check-in window can't be checked into.
-            CheckinHelper.serviceTimes = (times || []).filter((t) => (t as ServiceTimeInterface & { checkinOpen?: boolean }).checkinOpen !== false);
-            allClosed = times?.length > 0 && CheckinHelper.serviceTimes.length === 0;
+            CheckinHelper.serviceTimes = times || [];
+            allClosed = CheckinHelper.serviceTimes.length > 0 && CheckinHelper.serviceTimes.every(CheckinHelper.isClosed);
           }
         ),
         ApiHelper.get("/groupservicetimes", "AttendanceApi").then(
@@ -133,7 +137,8 @@ const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
           })
       ]);
       if (allClosed) {
-        setNotOpen(true);
+        const opens = CheckinHelper.opensLabel(CheckinHelper.serviceTimes);
+        setNotOpen(opens ? Locale.label("mobile.screens.checkinOpensAt").replace("{}", opens) : Locale.label("mobile.screens.checkinNotOpen"));
         return;
       }
 
@@ -159,7 +164,8 @@ const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
               "id",
               gst.groupId
             );
-            st.groups?.push(g);
+            // A link to an archived or deleted group finds nothing; skip it rather than leave a null slot.
+            if (g) st.groups?.push(g);
           }
         );
       });
@@ -176,7 +182,7 @@ const ServicesStep = ({ onSelected }: { onSelected: () => void }) => {
     <PlateSection>
       <Intro>{Locale.label("mobile.screens.chooseServiceSubtitle")}</Intro>
       {error && <Notice tone="error">{error}</Notice>}
-      {notOpen && <Notice tone="info" testId="checkin-not-open">{Locale.label("mobile.screens.checkinNotOpen")}</Notice>}
+      {notOpen && <Notice tone="info" testId="checkin-not-open">{notOpen}</Notice>}
 
       {isLoading ? (
         <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}><CircularProgress /></Box>
@@ -281,7 +287,7 @@ const HouseholdStep = ({
 
   const isCheckedIn = (personId: string): boolean => {
     const visit = CheckinHelper.getVisitByPersonId(CheckinHelper.existingVisits, personId);
-    return !!(visit && visit.id);
+    return CheckinHelper.isVisitToday(visit);
   };
 
   const selectServiceTime = (member: PersonInterface, st: ServiceTimeInterface) => {
@@ -290,7 +296,7 @@ const HouseholdStep = ({
   };
 
   const changeMember = (member: PersonInterface) => {
-    const times = CheckinHelper.serviceTimes || [];
+    const times = (CheckinHelper.serviceTimes || []).filter((st) => !CheckinHelper.isClosed(st));
     if (times.length === 1) selectServiceTime(member, times[0]);
     else setSelectedMember(member);
   };
@@ -305,6 +311,19 @@ const HouseholdStep = ({
       const group: GroupInterface = ArrayHelper.getOne(validGroups, "id", groupId);
       selectedGroupName = group?.name || Locale.label("mobile.screens.none");
       hasSelection = true;
+    }
+
+    if (CheckinHelper.isClosed(st)) {
+      const opens = CheckinHelper.opensLabel([st]);
+      return (
+        <Row
+          key={st.id}
+          title={st.name}
+          subtitle={opens ? Locale.label("mobile.screens.checkinClosedOpens").replace("{}", opens) : Locale.label("mobile.screens.checkinClosed")}
+          sx={{ minHeight: 48 }}
+          data-testid={`service-time-closed-${st.id}`}
+        />
+      );
     }
 
     return (
@@ -386,7 +405,7 @@ const HouseholdStep = ({
           CheckinHelper.existingVisits,
           pv.personId || ""
         );
-        if (existing && existing.id) {
+        if (CheckinHelper.isVisitToday(existing)) {
           const person = CheckinHelper.householdMembers.find((m) => m.id === pv.personId);
           if (person) already.push(person.name?.display || "Unknown");
         }
