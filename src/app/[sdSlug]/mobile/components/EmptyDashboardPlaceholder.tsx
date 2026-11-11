@@ -22,7 +22,7 @@ export const EmptyDashboardPlaceholder = ({ config, head }: Props) => {
 
   const adminUrl = useMemo(() => {
     if (!canAccessAdmin || !context?.userChurch?.jwt || !context?.userChurch?.church?.id) return "";
-    const url = new URL(EnvironmentHelper.Common.B1AdminRoot.replace(/\/$/, "") + "/login");
+    const url = new URL(EnvironmentHelper.Common.B1AdminRoot + "/login");
     url.searchParams.set("churchId", context.userChurch.church.id);
     url.searchParams.set("returnUrl", "/mobile/navigation");
     url.hash = "jwt=" + encodeURIComponent(context.userChurch.jwt);

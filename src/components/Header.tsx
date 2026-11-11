@@ -93,16 +93,14 @@ export function Header(props: Props) {
     setLogoError(false);
   }, [props.config?.appearance?.logoLight, props.config?.appearance?.logoDark, transparent]);
 
+  // Signs the user into this install's Admin (B1AdminRoot), landing on returnUrl.
+  const adminLoginUrl = (returnUrl: string) => `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${context?.userChurch?.church?.id}&returnUrl=${returnUrl}#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`;
   const memberPortal = <MenuItem onClick={() => { router.push("/mobile"); }} dense data-testid="member-portal-menu-item" aria-label={Locale.label("header.goMemberPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>person</Icon> {Locale.label("header.memberPortal")}</MenuItem>;
   const adminPortal = (UserHelper.currentUserChurch && UserHelper.checkAccess(Permissions.contentApi.content.edit)) && (
-    <MenuItem onClick={() => { window.location.href = `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} dense data-testid="admin-portal-menu-item" aria-label={Locale.label("header.goAdminPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>settings</Icon> {Locale.label("header.adminPortal")}</MenuItem>
+    <MenuItem onClick={() => { window.location.href = adminLoginUrl("/"); }} dense data-testid="admin-portal-menu-item" aria-label={Locale.label("header.goAdminPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>settings</Icon> {Locale.label("header.adminPortal")}</MenuItem>
   );
 
-  const getAccountUrl = () => {
-    const jwt = context?.userChurch?.jwt;
-    const churchId = context?.userChurch?.church?.id;
-    return `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${churchId}&returnUrl=/profile#jwt=${encodeURIComponent(jwt || "")}`;
-  };
+  const getAccountUrl = () => adminLoginUrl("/profile");
 
   const handleEditMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setEditMenuAnchor(event.currentTarget);
@@ -177,7 +175,7 @@ export function Header(props: Props) {
     </ListItem>
     {UserHelper.checkAccess(Permissions.contentApi.content.edit) && (<>
       <ListItem disablePadding>
-        <ListItemButton onClick={() => { window.location.href = `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} data-testid="admin-portal-list-item" aria-label={Locale.label("header.goAdminPortal")}>
+        <ListItemButton onClick={() => { window.location.href = adminLoginUrl("/"); }} data-testid="admin-portal-list-item" aria-label={Locale.label("header.goAdminPortal")}>
           <ListItemIcon><Icon color="secondary">settings</Icon></ListItemIcon>
           <ListItemText primary={Locale.label("header.adminPortal")} />
         </ListItemButton>

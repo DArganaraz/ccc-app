@@ -100,7 +100,7 @@ test.describe.serial("Public event pages and upcoming-event tiles", () => {
     const now = Date.now();
     for (const s of starts) expect(new Date(s).getTime()).toBeGreaterThan(now - 24 * 60 * 60 * 1000);
 
-    const hrefs = await tiles.evaluateAll((els) => els.map((el) => el.getAttribute("href") || ""));
+    const hrefs = await tiles.evaluateAll((els) => els.map((el) => el.querySelector("[data-testid=upcoming-event-link]")?.getAttribute("href") || ""));
     expect(new Set(hrefs).size, "a recurring event appears once").toBe(hrefs.length);
     for (const h of hrefs) expect(h).toMatch(/^\/events\/EVT\d+$/);
 
