@@ -21,6 +21,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { StyleHelper } from "@churchapps/apphelper/website";
 import { ConfigurationInterface } from "@/helpers/ConfigHelper";
 import UserContext from "@/context/UserContext";
+import { EnvironmentHelper } from "@/helpers/EnvironmentHelper";
 
 
 type Props = {
@@ -94,13 +95,13 @@ export function Header(props: Props) {
 
   const memberPortal = <MenuItem onClick={() => { router.push("/mobile"); }} dense data-testid="member-portal-menu-item" aria-label={Locale.label("header.goMemberPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>person</Icon> {Locale.label("header.memberPortal")}</MenuItem>;
   const adminPortal = (UserHelper.currentUserChurch && UserHelper.checkAccess(Permissions.contentApi.content.edit)) && (
-    <MenuItem onClick={() => { window.location.href = `https://admin.b1.church/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} dense data-testid="admin-portal-menu-item" aria-label={Locale.label("header.goAdminPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>settings</Icon> {Locale.label("header.adminPortal")}</MenuItem>
+    <MenuItem onClick={() => { window.location.href = `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} dense data-testid="admin-portal-menu-item" aria-label={Locale.label("header.goAdminPortal")}><Icon sx={{ marginRight: "10px", fontSize: "20px !important" }}>settings</Icon> {Locale.label("header.adminPortal")}</MenuItem>
   );
 
   const getAccountUrl = () => {
     const jwt = context?.userChurch?.jwt;
     const churchId = context?.userChurch?.church?.id;
-    return `https://admin.b1.church/login?churchId=${churchId}&returnUrl=/profile#jwt=${encodeURIComponent(jwt || "")}`;
+    return `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${churchId}&returnUrl=/profile#jwt=${encodeURIComponent(jwt || "")}`;
   };
 
   const handleEditMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
@@ -176,7 +177,7 @@ export function Header(props: Props) {
     </ListItem>
     {UserHelper.checkAccess(Permissions.contentApi.content.edit) && (<>
       <ListItem disablePadding>
-        <ListItemButton onClick={() => { window.location.href = `https://admin.b1.church/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} data-testid="admin-portal-list-item" aria-label={Locale.label("header.goAdminPortal")}>
+        <ListItemButton onClick={() => { window.location.href = `${EnvironmentHelper.Common.B1AdminRoot}/login?churchId=${context?.userChurch?.church?.id}&returnUrl=/#jwt=${encodeURIComponent(context?.userChurch?.jwt || "")}`; }} data-testid="admin-portal-list-item" aria-label={Locale.label("header.goAdminPortal")}>
           <ListItemIcon><Icon color="secondary">settings</Icon></ListItemIcon>
           <ListItemText primary={Locale.label("header.adminPortal")} />
         </ListItemButton>

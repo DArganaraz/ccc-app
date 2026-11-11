@@ -47,7 +47,7 @@ export const MoreCardsPage = ({ config }: Props) => {
 
   const adminUrl = useMemo(() => {
     if (!canAccessAdmin || !context?.userChurch?.jwt || !context?.userChurch?.church?.id) return "";
-    const url = new URL("/login", EnvironmentHelper.Common.B1AdminRoot);
+    const url = new URL(EnvironmentHelper.Common.B1AdminRoot.replace(/\/$/, "") + "/login");
     url.searchParams.set("churchId", context.userChurch.church.id);
     url.searchParams.set("returnUrl", "/");
     url.hash = "jwt=" + encodeURIComponent(context.userChurch.jwt);
