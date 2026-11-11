@@ -14,6 +14,14 @@ interface Props { element: ElementInterface; churchId: string; }
 
 const MAX_TILES = 12;
 
+// Registration is on and today is inside its open/close window (either end may be unset), matching the Api's register check.
+const registrationOpen = (event: any, now: Date) => {
+  if (!event?.registrationEnabled) return false;
+  if (event.registrationOpenDate && new Date(event.registrationOpenDate) > now) return false;
+  if (event.registrationCloseDate && new Date(event.registrationCloseDate) < now) return false;
+  return true;
+};
+
 const whenLine = (o: Occurrence) => {
   const weekday = o.start.toLocaleDateString(undefined, { weekday: "long" });
   if (o.event.allDay) return weekday + ", " + o.start.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -74,6 +82,7 @@ export const UpcomingEventsElement = ({ element, churchId }: Props) => {
   const tiles = (items || []).map((o) => {
     const photo = (o.event as any).photoUrl as string | undefined;
     const groupName = showGroupBadge && o.event.groupId ? groupNames[o.event.groupId] : undefined;
+    const canRegister = registrationOpen(o.event, new Date());
     return (
       <Box key={eventPageId(o.event) + o.start.toISOString()} component={Link} href={"/events/" + eventPageId(o.event)} data-testid="upcoming-event-tile" data-start={o.start.toISOString()}
         sx={{ display: "block", textDecoration: "none", color: "inherit", border: "1px solid", borderColor: "divider", borderRadius: 3, overflow: "hidden", bgcolor: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.06)", "&:hover": { boxShadow: 4 } }}>
@@ -83,6 +92,7 @@ export const UpcomingEventsElement = ({ element, churchId }: Props) => {
             <Typography component="span" sx={{ display: "block", fontSize: 20, fontWeight: 700, color: "text.primary" }}>{o.start.getDate()}</Typography>
           </Box>
           {groupName && <Typography component="span" data-testid="upcoming-event-group-badge" sx={{ position: "absolute", right: 14, top: 14, maxWidth: "55%", bgcolor: EventHelper.groupColor(o.event.groupId), color: "#fff", borderRadius: 2, px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>{groupName}</Typography>}
+          {canRegister && <Typography component="span" data-testid="upcoming-event-registration-badge" sx={{ position: "absolute", left: 14, bottom: 14, display: "inline-flex", alignItems: "center", gap: 0.5, bgcolor: "#2e7d32", color: "#fff", borderRadius: 2, px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}><Icon sx={{ fontSize: "16px !important" }}>how_to_reg</Icon>{Locale.label("eventPage.registrationOpen")}</Typography>}
           {!photo && <Typography sx={{ color: "#fff", fontWeight: 700, fontSize: 22, textAlign: "center", fontFamily: "var(--headingFont, inherit)" }}>{o.event.title}</Typography>}
         </Box>
         <Box sx={{ px: 2.25, pt: 2, pb: 2.25 }}>
