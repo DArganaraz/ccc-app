@@ -84,22 +84,29 @@ export const UpcomingEventsElement = ({ element, churchId }: Props) => {
     const groupName = showGroupBadge && o.event.groupId ? groupNames[o.event.groupId] : undefined;
     const canRegister = registrationOpen(o.event, new Date());
     return (
-      <Box key={eventPageId(o.event) + o.start.toISOString()} component={Link} href={"/events/" + eventPageId(o.event)} data-testid="upcoming-event-tile" data-start={o.start.toISOString()}
-        sx={{ display: "block", textDecoration: "none", color: "inherit", border: "1px solid", borderColor: "divider", borderRadius: 3, overflow: "hidden", bgcolor: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.06)", "&:hover": { boxShadow: 4 } }}>
-        <Box sx={{ position: "relative", aspectRatio: "16 / 9", backgroundImage: photo ? "url(" + photo + ")" : undefined, backgroundSize: "cover", backgroundPosition: "center", bgcolor: photo ? undefined : "var(--dark, #1B4965)", display: "flex", alignItems: "center", justifyContent: "center", px: 3 }}>
-          <Box sx={{ position: "absolute", left: 14, top: 14, bgcolor: "#fff", borderRadius: 2, px: 1.25, py: 0.75, textAlign: "center", lineHeight: 1.05, boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>
-            <Typography component="span" sx={{ display: "block", fontSize: 11, letterSpacing: ".08em", fontWeight: 700, color: "primary.main", textTransform: "uppercase" }}>{o.start.toLocaleDateString(undefined, { month: "short" })}</Typography>
-            <Typography component="span" sx={{ display: "block", fontSize: 20, fontWeight: 700, color: "text.primary" }}>{o.start.getDate()}</Typography>
+      // The card is a box, not a link, so the Register now button can sit outside the event-page link.
+      <Box key={eventPageId(o.event) + o.start.toISOString()} data-testid="upcoming-event-tile" data-start={o.start.toISOString()}
+        sx={{ display: "flex", flexDirection: "column", border: "1px solid", borderColor: "divider", borderRadius: 3, overflow: "hidden", bgcolor: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,.06)", "&:hover": { boxShadow: 4 } }}>
+        <Box component={Link} href={"/events/" + eventPageId(o.event)} data-testid="upcoming-event-link" sx={{ display: "block", flexGrow: 1, textDecoration: "none", color: "inherit" }}>
+          <Box sx={{ position: "relative", aspectRatio: "16 / 9", backgroundImage: photo ? "url(" + photo + ")" : undefined, backgroundSize: "cover", backgroundPosition: "center", bgcolor: photo ? undefined : "var(--dark, #1B4965)", display: "flex", alignItems: "center", justifyContent: "center", px: 3 }}>
+            <Box sx={{ position: "absolute", left: 14, top: 14, bgcolor: "#fff", borderRadius: 2, px: 1.25, py: 0.75, textAlign: "center", lineHeight: 1.05, boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>
+              <Typography component="span" sx={{ display: "block", fontSize: 11, letterSpacing: ".08em", fontWeight: 700, color: "primary.main", textTransform: "uppercase" }}>{o.start.toLocaleDateString(undefined, { month: "short" })}</Typography>
+              <Typography component="span" sx={{ display: "block", fontSize: 20, fontWeight: 700, color: "text.primary" }}>{o.start.getDate()}</Typography>
+            </Box>
+            {groupName && <Typography component="span" data-testid="upcoming-event-group-badge" sx={{ position: "absolute", right: 14, top: 14, maxWidth: "55%", bgcolor: EventHelper.groupColor(o.event.groupId), color: "#fff", borderRadius: 2, px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>{groupName}</Typography>}
+            {!photo && <Typography sx={{ color: "#fff", fontWeight: 700, fontSize: 22, textAlign: "center", fontFamily: "var(--headingFont, inherit)" }}>{o.event.title}</Typography>}
           </Box>
-          {groupName && <Typography component="span" data-testid="upcoming-event-group-badge" sx={{ position: "absolute", right: 14, top: 14, maxWidth: "55%", bgcolor: EventHelper.groupColor(o.event.groupId), color: "#fff", borderRadius: 2, px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}>{groupName}</Typography>}
-          {canRegister && <Typography component="span" data-testid="upcoming-event-registration-badge" sx={{ position: "absolute", left: 14, bottom: 14, display: "inline-flex", alignItems: "center", gap: 0.5, bgcolor: "#2e7d32", color: "#fff", borderRadius: 2, px: 1.25, py: 0.5, fontSize: 12, fontWeight: 700, boxShadow: "0 1px 3px rgba(0,0,0,.2)" }}><Icon sx={{ fontSize: "16px !important" }}>how_to_reg</Icon>{Locale.label("eventPage.registrationOpen")}</Typography>}
-          {!photo && <Typography sx={{ color: "#fff", fontWeight: 700, fontSize: 22, textAlign: "center", fontFamily: "var(--headingFont, inherit)" }}>{o.event.title}</Typography>}
+          <Box sx={{ px: 2.25, pt: 2, pb: 2.25 }}>
+            <Typography component="h3" sx={{ m: 0, mb: 0.75, fontSize: 18, fontWeight: 700, color: "text.primary" }}>{o.event.title}</Typography>
+            <Typography sx={{ color: "primary.main", fontWeight: 500, fontSize: 15, mb: 1 }}>{whenLine(o)}</Typography>
+            <Typography sx={{ color: "text.secondary", fontSize: 15, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{firstLine(o.event.description)}</Typography>
+          </Box>
         </Box>
-        <Box sx={{ px: 2.25, pt: 2, pb: 2.25 }}>
-          <Typography component="h3" sx={{ m: 0, mb: 0.75, fontSize: 18, fontWeight: 700, color: "text.primary" }}>{o.event.title}</Typography>
-          <Typography sx={{ color: "primary.main", fontWeight: 500, fontSize: 15, mb: 1 }}>{whenLine(o)}</Typography>
-          <Typography sx={{ color: "text.secondary", fontSize: 15, lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{firstLine(o.event.description)}</Typography>
-        </Box>
+        {canRegister && (
+          <Box sx={{ px: 2.25, pb: 2.25 }}>
+            <Button component={Link} href={"/register/" + eventPageId(o.event)} variant="contained" fullWidth startIcon={<Icon>how_to_reg</Icon>} data-testid="upcoming-event-register-button">{Locale.label("eventPage.registerNow")}</Button>
+          </Box>
+        )}
       </Box>
     );
   });
